@@ -1,0 +1,42 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+
+# ── Biometric data (NEVER commit real templates or personal palm images) ───────
+data/
+captures/
+roi_clahe/
+database/
+*.db
+*.db-shm
+*.db-wal
+
+# ── MediaPipe model (large binary — download separately) ──────────────────────
+hand_landmarker.task
+
+# ── Test/sample images ────────────────────────────────────────────────────────
+*.bmp
+*.npz
+
+# ── OS junk ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
