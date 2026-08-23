@@ -42,3 +42,8 @@ desktop.ini
 *.swp
 
 .agents/*
+
+# ── Node / Web ─────────────────────────────────────────────────────────────────
+node_modules/
+web/node_modules/
+web/dist/
