@@ -162,19 +162,19 @@ def enroll(picam2, still_config, preview_config, landmarker, engine):
 
 def _run_consistency_check(veincode_list: list):
     """Compute pairwise MNHD between all collected samples and warn if any pair
-    scores above 0.45 — high distance suggests inconsistent hand placement."""
+    scores above 0.50 — high distance suggests inconsistent hand placement."""
     print("\nChecking template consistency...")
     inconsistent = []
     for a in range(len(veincode_list)):
         for b in range(a + 1, len(veincode_list)):
             score = match_templates(veincode_list[a], veincode_list[b])
-            if score > 0.45:
+            if score > 0.50:
                 inconsistent.append((a, b, score))
 
     if inconsistent:
         print(f"WARNING: {len(inconsistent)} sample pair(s) have high distance:")
         for a, b, s in inconsistent:
-            print(f"  Sample {a+1} vs Sample {b+1}: {s:.4f} (threshold 0.45)")
+            print(f"  Sample {a+1} vs Sample {b+1}: {s:.4f} (threshold 0.50)")
         print("Consider re-enrolling for better accuracy.")
     else:
         print("All samples consistent. Enrollment quality: GOOD")
