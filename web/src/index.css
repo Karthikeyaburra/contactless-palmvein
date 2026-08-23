@@ -4,35 +4,75 @@
 
 @layer base {
   body {
-    background-color: #FFFDF0;
+    background-color: #FFC800;
     color: #121212;
     font-family: 'Plus Jakarta Sans', sans-serif;
   }
 }
 
-/* Neobrutalism Dot Grid Background */
-.bg-neo-dots {
-  background-image: radial-gradient(#d3cbb8 1.5px, transparent 1.5px);
-  background-size: 18px 18px;
+/* Vibrant Yellow Polka Dot Background (matching the Dribbble backdrop) */
+.bg-dribbble-yellow {
+  background-color: #FFC800;
+  background-image: radial-gradient(#121212 1.8px, transparent 1.8px);
+  background-size: 22px 22px;
 }
 
-/* Custom Neobrutalist Button Active Depression */
+/* Cream App Background with subtle micro-dots */
+.bg-neo-cream {
+  background-color: #FFFDF0;
+  background-image: radial-gradient(#d8cfb4 1.4px, transparent 1.4px);
+  background-size: 16px 16px;
+}
+
+/* Neobrutalism Button Hover & Active Depression (from neobrutalism.dev) */
 .neo-btn {
-  transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, background-color 0.12s ease;
+  will-change: transform, box-shadow;
 }
+
+.neo-btn:hover:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px #121212 !important;
+}
+
 .neo-btn:active:not(:disabled) {
-  transform: translate(3px, 3px);
-  box-shadow: 1px 1px 0px #121212 !important;
+  transform: translate(4px, 4px);
+  box-shadow: 0px 0px 0px #121212 !important;
 }
 
-/* Neobrutalist Floating Card */
-.neo-box {
+/* Neobrutalist Interactive Cards */
+.neo-card {
   border: 3px solid #121212;
-  box-shadow: 4px 4px 0px #121212;
-  border-radius: 16px;
+  box-shadow: 5px 5px 0px #121212;
+  border-radius: 20px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-/* Custom Scrollbar for User Cards */
+.neo-card-hover:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0px #121212;
+}
+
+/* Wiggle animation */
+@keyframes neo-wiggle {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+
+.animate-wiggle {
+  animation: neo-wiggle 3s ease-in-out infinite;
+}
+
+@keyframes neo-float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+.animate-float {
+  animation: neo-float 4s ease-in-out infinite;
+}
+
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -41,5 +81,5 @@
 }
 ::-webkit-scrollbar-thumb {
   background: #121212;
-  border-radius: 3px;
+  border-radius: 4px;
 }

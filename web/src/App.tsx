@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import confetti from 'canvas-confetti';
 import { 
   Scan, 
   UserPlus, 
   Users, 
   Settings, 
   ShieldCheck, 
-  ShieldAlert, 
   CheckCircle2, 
   XCircle, 
   Camera, 
@@ -14,13 +14,23 @@ import {
   Search, 
   Plus, 
   Sparkles, 
-  Activity, 
   Database, 
-  Cpu, 
   ArrowRight,
   RefreshCw,
   Clock,
-  Layers
+  CreditCard,
+  Coffee,
+  ShoppingBag,
+  Zap,
+  Star,
+  Compass,
+  Lock,
+  ChevronRight,
+  Flame,
+  Award,
+  Layers,
+  HelpCircle,
+  Eye
 } from 'lucide-react';
 
 interface User {
@@ -37,6 +47,8 @@ interface ScanResult {
   threshold: number;
   time_ms: number;
   clahe_base64?: string;
+  item_name?: string;
+  amount?: number;
 }
 
 interface ReportData {
@@ -45,11 +57,19 @@ interface ReportData {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'scan' | 'enroll' | 'users' | 'admin'>('scan');
+  // Navigation: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'
+  const [activeTab, setActiveTab] = useState<'landing' | 'scan' | 'enroll' | 'users' | 'admin'>('landing');
   const [cameraReady, setCameraReady] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
+  // Payment Terminal mode in Scan tab
+  const [selectedPayItem, setSelectedPayItem] = useState<{ name: string; price: number; icon: string }>({
+    name: 'Espresso Coffee',
+    price: 4.50,
+    icon: '☕'
+  });
+
   // Scanning State
   const [isScanning, setIsScanning] = useState(false);
   const [lastScan, setLastScan] = useState<ScanResult | null>(null);
@@ -61,19 +81,18 @@ export default function App() {
   const [isCapturingSample, setIsCapturingSample] = useState(false);
   const [enrollStatusMsg, setEnrollStatusMsg] = useState('');
 
-  // Modals & Toast
+  // Modals & Toasts
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'warn' | 'error' } | null>(null);
 
-  // Auto-dismiss toast
   const showToast = (msg: string, type: 'success' | 'warn' | 'error' = 'success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2500);
+    setTimeout(() => setToast(null), 2600);
   };
 
-  // Fetch initial data
+  // Load Data
   const loadUsers = async () => {
     try {
       const res = await fetch('/api/users');
@@ -82,7 +101,7 @@ export default function App() {
         setUsers(data.users || []);
       }
     } catch (e) {
-      console.warn('API offline or mock mode:', e);
+      console.warn('Backend running in offline mock mode:', e);
     }
   };
 
@@ -103,43 +122,60 @@ export default function App() {
     loadStatus();
   }, []);
 
-  // Auto dismiss result overlay after 2.5s
-  useEffect(() => {
-    if (resultOverlay) {
-      const t = setTimeout(() => setResultOverlay(null), 2800);
-      return () => clearTimeout(t);
-    }
-  }, [resultOverlay]);
-
   // Trigger Scan
-  const handleScan = async () => {
+  const handleScan = async (isPayment = false) => {
     if (isScanning) return;
     setIsScanning(true);
+
     try {
       const res = await fetch('/api/scan', { method: 'POST' });
       if (res.ok) {
         const data: ScanResult = await res.json();
-        setLastScan(data);
-        setResultOverlay(data);
+        const finalRes: ScanResult = {
+          ...data,
+          item_name: isPayment ? selectedPayItem.name : undefined,
+          amount: isPayment ? selectedPayItem.price : undefined,
+        };
+        setLastScan(finalRes);
+        setResultOverlay(finalRes);
+
+        if (finalRes.accepted) {
+          confetti({
+            particleCount: 80,
+            spread: 70,
+            origin: { y: 0.6 },
+            colors: ['#FFDE59', '#38BDF8', '#FF4081', '#CCFF00', '#121212']
+          });
+        }
       } else {
+        // Fallback demo result
         const mockResult: ScanResult = {
           accepted: true,
           username: users[0]?.username || 'yesh-right',
           score: 0.1153,
           threshold: 0.3800,
           time_ms: 280,
+          item_name: isPayment ? selectedPayItem.name : undefined,
+          amount: isPayment ? selectedPayItem.price : undefined,
         };
         setLastScan(mockResult);
         setResultOverlay(mockResult);
+        confetti({
+          particleCount: 70,
+          spread: 60,
+          origin: { y: 0.6 },
+          colors: ['#FFDE59', '#38BDF8', '#FF4081', '#CCFF00']
+        });
       }
-    } catch (err) {
-      // Offline fallback mock
+    } catch {
       const mockResult: ScanResult = {
         accepted: true,
         username: users[0]?.username || 'yesh-right',
         score: 0.1153,
         threshold: 0.3800,
         time_ms: 280,
+        item_name: isPayment ? selectedPayItem.name : undefined,
+        amount: isPayment ? selectedPayItem.price : undefined,
       };
       setLastScan(mockResult);
       setResultOverlay(mockResult);
@@ -148,14 +184,15 @@ export default function App() {
     }
   };
 
-  // Trigger Sample Capture
+  // Sample Capture
   const handleCaptureSample = async () => {
     if (isCapturingSample || enrollSamples.length >= 6) return;
     if (!enrollUsername.trim()) {
-      showToast('Enter a username first!', 'warn');
+      showToast('Enter a user ID or name first!', 'warn');
       return;
     }
     setIsCapturingSample(true);
+
     try {
       const res = await fetch('/api/enroll/sample', {
         method: 'POST',
@@ -165,17 +202,14 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setEnrollSamples(prev => [...prev, { vr_mean: data.vr_mean || 0.518, thumb: data.thumb || '' }]);
-        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured successfully!`);
+        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured! Quality: Excellent`);
         showToast(`Sample ${enrollSamples.length + 1}/6 captured!`, 'success');
       } else {
-        // Mock capture
         setEnrollSamples(prev => [...prev, { vr_mean: 0.518, thumb: '' }]);
-        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured!`);
         showToast(`Sample ${enrollSamples.length + 1}/6 captured!`, 'success');
       }
     } catch {
       setEnrollSamples(prev => [...prev, { vr_mean: 0.518, thumb: '' }]);
-      setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured!`);
       showToast(`Sample ${enrollSamples.length + 1}/6 captured!`, 'success');
     } finally {
       setIsCapturingSample(false);
@@ -186,24 +220,26 @@ export default function App() {
   const handleSaveEnrollment = async () => {
     if (enrollSamples.length < 3 || !enrollUsername.trim()) return;
     try {
-      const res = await fetch('/api/enroll/save', {
+      await fetch('/api/enroll/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: enrollUsername }),
       });
-      showToast(`Enrolled '${enrollUsername}' with ${enrollSamples.length} samples!`, 'success');
-      setEnrollUsername('');
-      setEnrollSamples([]);
-      setEnrollStatusMsg('');
-      loadUsers();
-      setActiveTab('users');
-    } catch (e) {
-      showToast(`Saved '${enrollUsername}'!`, 'success');
-      setEnrollUsername('');
-      setEnrollSamples([]);
-      loadUsers();
-      setActiveTab('users');
+    } catch {
+      // Offline fallback
     }
+    showToast(`ENROLLED '${enrollUsername}' with ${enrollSamples.length} samples!`, 'success');
+    confetti({
+      particleCount: 100,
+      spread: 80,
+      origin: { y: 0.5 },
+      colors: ['#FFDE59', '#38BDF8', '#FF4081', '#CCFF00']
+    });
+    setEnrollUsername('');
+    setEnrollSamples([]);
+    setEnrollStatusMsg('');
+    loadUsers();
+    setActiveTab('users');
   };
 
   // Delete User
@@ -211,17 +247,15 @@ export default function App() {
     if (!deleteTarget) return;
     try {
       await fetch(`/api/users/${deleteTarget}`, { method: 'DELETE' });
-      showToast(`User '${deleteTarget}' deleted!`, 'error');
-      setDeleteTarget(null);
-      loadUsers();
     } catch {
-      setUsers(users.filter(u => u.username !== deleteTarget));
-      showToast(`User '${deleteTarget}' deleted!`, 'error');
-      setDeleteTarget(null);
+      // offline fallback
     }
+    setUsers(prev => prev.filter(u => u.username !== deleteTarget));
+    showToast(`User '${deleteTarget}' deleted!`, 'error');
+    setDeleteTarget(null);
   };
 
-  // Fetch Report
+  // Open Report
   const openReport = async () => {
     setReportModalOpen(true);
     try {
@@ -243,36 +277,62 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#FFFDF0] flex justify-center items-start sm:py-6 text-[#121212]">
-      {/* Mobile Portrait Frame (480px) */}
-      <div className="w-full max-w-[480px] min-h-screen sm:min-h-[854px] sm:h-[854px] bg-[#FFFDF0] border-x-0 sm:border-[4px] border-black sm:rounded-[32px] sm:shadow-[8px_8px_0px_#121212] flex flex-col relative overflow-hidden bg-neo-dots">
+    <div className="min-h-screen bg-dribbble-yellow flex justify-center items-center p-0 sm:p-6 text-[#121212] select-none font-sans">
+      
+      {/* ── PHONE CONTAINER (480px Portrait Neobrutalism Frame) ── */}
+      <div className="w-full max-w-[480px] min-h-screen sm:min-h-[854px] sm:h-[854px] bg-[#FFFDF0] border-x-0 sm:border-[4px] border-black sm:rounded-[36px] sm:shadow-[10px_10px_0px_#121212] flex flex-col relative overflow-hidden bg-neo-cream">
 
-        {/* ── TOP HEADER BAR ── */}
-        <header className="px-5 py-4 bg-[#FFFDF0] border-b-[3px] border-black flex items-center justify-between z-10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[#FFDE59] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-lg">
+        {/* ── TOP STATUS / SERVICE BAR (from Dribbble mockup) ── */}
+        <div className="px-6 pt-3 pb-1 flex items-center justify-between text-xs font-black text-black z-20">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-black"></span>
+            <span className="w-2 h-2 rounded-full bg-black"></span>
+            <span className="text-[11px]">Service</span>
+          </div>
+          <span className="font-display text-sm font-black">19:02</span>
+          <div className="flex items-center gap-1.5">
+            <div className={`w-3 h-3 rounded-full border-[1.5px] border-black ${cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF7A00]'}`} />
+            <div className="w-5 h-2.5 border-[1.5px] border-black rounded-sm p-[1px]">
+              <div className="w-full h-full bg-black rounded-[0.5px]"></div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── TOP PROFILE / HEADER (from Dribbble mockup) ── */}
+        <header className="px-5 py-2.5 flex items-center justify-between z-20 border-b-[3px] border-black bg-[#FFFDF0]">
+          <div 
+            onClick={() => setActiveTab('landing')} 
+            className="flex items-center gap-2.5 cursor-pointer neo-btn"
+          >
+            <div className="w-10 h-10 rounded-full bg-[#FFDE59] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black text-base">
               🖐️
             </div>
             <div>
-              <h1 className="font-display font-black text-lg leading-tight tracking-tight">PALM VEIN</h1>
-              <p className="text-[11px] font-bold text-[#666] tracking-wide uppercase">Edge Biometrics Pi 5</p>
+              <h1 className="font-display font-black text-base leading-none">Sam Smith</h1>
+              <p className="text-[10px] font-bold text-[#666] mt-0.5">Always a winner!</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-[#CCFF00] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] text-xs font-black">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>99.9% ACC</span>
+            <div className="px-2.5 py-1 bg-[#38BDF8] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] text-xs font-black flex items-center gap-1">
+              <Star className="w-3.5 h-3.5 fill-[#FFDE59] text-black" />
+              <span>15 Stars</span>
             </div>
-            <div className={`w-3.5 h-3.5 rounded-full border-[2px] border-black ${cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF7A00]'}`} title={cameraReady ? 'NoIR Camera Ready' : 'Camera Standby'} />
+            <button 
+              onClick={() => setActiveTab('landing')}
+              className="w-8 h-8 rounded-full bg-[#FFDE59] border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black text-xs neo-btn"
+              title="Home Landing"
+            >
+              ✏️
+            </button>
           </div>
         </header>
 
-        {/* ── TOAST NOTIFICATION ── */}
+        {/* ── TOAST ALERT ── */}
         {toast && (
           <div className="absolute top-20 left-6 right-6 z-50 animate-bounce">
-            <div className={`p-3 border-[3px] border-black rounded-xl shadow-[4px_4px_0px_#121212] font-display font-bold text-sm text-center flex items-center justify-center gap-2 ${
-              toast.type === 'error' ? 'bg-[#FF4081] text-white' : toast.type === 'warn' ? 'bg-[#FF7A00] text-white' : 'bg-[#FFDE59] text-black'
+            <div className={`p-3 border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-xs text-center flex items-center justify-center gap-2 ${
+              toast.type === 'error' ? 'bg-[#FF4081] text-white' : toast.type === 'warn' ? 'bg-[#FF7A00] text-white' : 'bg-[#CCFF00] text-black'
             }`}>
               <CheckCircle2 className="w-4 h-4" />
               <span>{toast.msg}</span>
@@ -280,116 +340,260 @@ export default function App() {
           </div>
         )}
 
-        {/* ── MAIN CONTENT AREA (SCROLLABLE) ── */}
+        {/* ── MAIN SCROLLABLE CONTENT ── */}
         <main className="flex-1 overflow-y-auto px-5 py-4 pb-28 space-y-4">
 
-          {/* ══════════ SCREEN 0: SCAN ══════════ */}
-          {activeTab === 'scan' && (
+          {/* ══════════════════════════════════════════════════════════
+              PAGE 1: ANIMATED LANDING PAGE (Dribbble Hero Experience)
+             ══════════════════════════════════════════════════════════ */}
+          {activeTab === 'landing' && (
             <div className="space-y-4 animate-fadeIn">
-              <div>
-                <h2 className="font-display font-black text-2xl tracking-tight">AUTHENTICATION</h2>
-                <p className="text-xs font-bold text-[#666]">Hold palm 10–15cm above NIR sensor</p>
+              
+              {/* Illustrated Geometric Hero Card */}
+              <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center text-center">
+                
+                {/* Floating Geometric Elements (from Dribbble reference) */}
+                <div className="absolute top-2 left-3 w-8 h-8 border-[2px] border-black bg-[#FFDE59] rounded-md grid grid-cols-2 grid-rows-2">
+                  <div className="border-r border-b border-black"></div>
+                  <div className="border-b border-black"></div>
+                  <div className="border-r border-black"></div>
+                </div>
+
+                <div className="absolute top-3 right-3 w-8 h-8 bg-[#38BDF8] border-[2px] border-black rounded-md flex items-center justify-center text-[10px] font-black">
+                  📐
+                </div>
+
+                {/* Main Avatar / Character Badge */}
+                <div className="relative my-2">
+                  <div className="w-24 h-24 rounded-full bg-[#FFFDF0] border-[3.5px] border-black shadow-[4px_4px_0px_#121212] flex items-center justify-center relative overflow-hidden">
+                    <span className="text-5xl">👤</span>
+                  </div>
+                  {/* Cursor sticker */}
+                  <div className="absolute -bottom-1 -right-2 w-7 h-7 bg-[#FFDE59] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] flex items-center justify-center text-xs">
+                    ✋
+                  </div>
+                </div>
+
+                {/* Catchy Dribbble Typography */}
+                <div className="space-y-1 my-2">
+                  <h2 className="font-display font-black text-xl leading-tight">
+                    Sepideh <span className="text-[#FF4081]">just authorized</span> her payment for today!
+                  </h2>
+                  <p className="text-xs font-bold text-[#666]">Sub-dermal infrared vein biometrics. 100% forgery proof.</p>
+                </div>
+
+                {/* Primary CTA Button */}
+                <button
+                  onClick={() => setActiveTab('scan')}
+                  className="mt-2 w-full py-3.5 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe373]"
+                >
+                  <span>See what she did</span>
+                  <ArrowRight className="w-5 h-5 stroke-[3]" />
+                </button>
               </div>
 
-              {/* Viewport Scanner Card */}
-              <div className="bg-white border-[3px] border-black rounded-2xl p-6 shadow-[5px_5px_0px_#121212] relative overflow-hidden flex flex-col items-center">
-                {/* Corner decorative crosses */}
-                <span className="absolute top-2 left-2 text-xs font-black text-black select-none">+</span>
-                <span className="absolute top-2 right-2 text-xs font-black text-black select-none">+</span>
-                <span className="absolute bottom-2 left-2 text-xs font-black text-black select-none">+</span>
-                <span className="absolute bottom-2 right-2 text-xs font-black text-black select-none">+</span>
+              {/* Countdown / Metrics Card (from Dribbble mockup) */}
+              <div className="bg-white border-[3px] border-black rounded-3xl p-4 shadow-[5px_5px_0px_#121212] space-y-3">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="font-display font-black text-sm">Biometric Checkout #5</h3>
+                    <p className="text-[11px] font-bold text-[#666]">Instant contactless palm terminal</p>
+                  </div>
+                  <div className="flex text-xs">⭐⭐⭐⭐☆</div>
+                </div>
 
-                {/* Animated Pulsing Radar */}
+                {/* 3 Metric Countdown Blocks (1 : 15 : 32) */}
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
+                    <span className="font-display font-black text-2xl block leading-none">0.28</span>
+                    <span className="text-[10px] font-black text-[#FF4081] uppercase">Seconds</span>
+                  </div>
+                  <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
+                    <span className="font-display font-black text-2xl block leading-none">0.11</span>
+                    <span className="text-[10px] font-black text-[#38BDF8] uppercase">MNHD Score</span>
+                  </div>
+                  <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
+                    <span className="font-display font-black text-2xl block leading-none">{users.length}</span>
+                    <span className="text-[10px] font-black text-[#00aa44] uppercase">Profiles</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setActiveTab('scan');
+                    handleScan(true);
+                  }}
+                  className="w-full py-3 bg-[#FFDE59] border-[2.5px] border-black rounded-2xl shadow-[3px_3px_0px_#121212] font-display font-black text-sm neo-btn hover:bg-[#ffe373]"
+                >
+                  I'm Done! Start Scanning
+                </button>
+              </div>
+
+              {/* Quick Feature Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div 
+                  onClick={() => setActiveTab('enroll')}
+                  className="bg-[#38BDF8] border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] cursor-pointer neo-btn"
+                >
+                  <div className="w-8 h-8 rounded-full bg-white border-[2px] border-black flex items-center justify-center font-black text-sm mb-2">
+                    ➕
+                  </div>
+                  <h4 className="font-display font-black text-sm">Enroll Palm</h4>
+                  <p className="text-[10px] font-bold text-black mt-0.5">Register new 6-sample user</p>
+                </div>
+
+                <div 
+                  onClick={() => setActiveTab('users')}
+                  className="bg-[#CCFF00] border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] cursor-pointer neo-btn"
+                >
+                  <div className="w-8 h-8 rounded-full bg-white border-[2px] border-black flex items-center justify-center font-black text-sm mb-2">
+                    👥
+                  </div>
+                  <h4 className="font-display font-black text-sm">User Directory</h4>
+                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} enrolled templates</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════
+              PAGE 2: SCAN & VEINPAY POINT-OF-SALE
+             ══════════════════════════════════════════════════════════ */}
+          {activeTab === 'scan' && (
+            <div className="space-y-4 animate-fadeIn">
+              
+              {/* POS Mode Switcher */}
+              <div className="bg-white border-[3px] border-black rounded-2xl p-2 shadow-[3px_3px_0px_#121212] flex gap-1">
+                {[
+                  { name: 'Espresso Coffee', price: 4.50, icon: '☕' },
+                  { name: 'Store Purchase', price: 28.00, icon: '🛍️' },
+                  { name: 'Door Access', price: 0.00, icon: '🔑' },
+                ].map(item => {
+                  const isSel = selectedPayItem.name === item.name;
+                  return (
+                    <button
+                      key={item.name}
+                      onClick={() => setSelectedPayItem(item)}
+                      className={`flex-1 py-2 px-1 rounded-xl text-xs font-black transition-all neo-btn flex flex-col items-center ${
+                        isSel ? 'bg-[#FFDE59] border-[2px] border-black shadow-[2px_2px_0px_#121212]' : 'text-[#666]'
+                      }`}
+                    >
+                      <span className="text-base">{item.icon}</span>
+                      <span className="text-[10px] truncate max-w-[90px]">{item.name}</span>
+                      <span className="text-[9px] text-[#333]">${item.price.toFixed(2)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Main Sensor Scanner Card */}
+              <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center">
+                
+                {/* Decorative Crosses */}
+                <span className="absolute top-2.5 left-2.5 text-xs font-black text-black select-none">+</span>
+                <span className="absolute top-2.5 right-2.5 text-xs font-black text-black select-none">+</span>
+
+                {/* Radar Concentric Circles */}
                 <div className="relative w-44 h-44 flex items-center justify-center my-2">
-                  <div className={`absolute inset-0 rounded-full border-[3px] border-black ${isScanning ? 'bg-[#FF7A00]/20 animate-ping' : 'bg-[#FFFDF0]'}`} />
-                  <div className={`w-36 h-36 rounded-full border-[3px] border-[#38BDF8] flex items-center justify-center transition-all ${isScanning ? 'scale-110 border-[#FF7A00]' : 'animate-pulse'}`}>
+                  <div className={`absolute inset-0 rounded-full border-[3px] border-black ${isScanning ? 'bg-[#FF4081]/20 animate-ping' : 'bg-[#FFFDF0]'}`} />
+                  <div className={`w-36 h-36 rounded-full border-[3px] border-[#38BDF8] flex items-center justify-center ${isScanning ? 'animate-spin' : 'animate-pulse'}`}>
                     <div className="w-24 h-24 rounded-full bg-[#FFDE59] border-[3px] border-black shadow-[3px_3px_0px_#121212] flex items-center justify-center">
-                      <Fingerprint className={`w-12 h-12 ${isScanning ? 'animate-bounce text-[#FF7A00]' : 'text-black'}`} />
+                      <Fingerprint className={`w-12 h-12 ${isScanning ? 'animate-bounce text-[#FF4081]' : 'text-black'}`} />
                     </div>
                   </div>
                 </div>
 
-                <div className="mt-2 text-center">
-                  <span className={`inline-block px-3 py-1 rounded-full text-xs font-black border-[2px] border-black shadow-[2px_2px_0px_#121212] ${isScanning ? 'bg-[#FF7A00] text-white' : 'bg-[#CCFF00]'}`}>
-                    {isScanning ? 'ANALYZING VEIN MESH...' : 'SENSOR ARMED & READY'}
+                <div className="mt-1 text-center">
+                  <span className={`inline-block px-3.5 py-1 rounded-full text-xs font-black border-[2px] border-black shadow-[2px_2px_0px_#121212] ${
+                    isScanning ? 'bg-[#FF7A00] text-white' : 'bg-[#CCFF00]'
+                  }`}>
+                    {isScanning ? 'MATCHING GABOR VEINCODE...' : `READY: ${selectedPayItem.name.toUpperCase()}`}
                   </span>
                 </div>
               </div>
 
-              {/* Primary Action Button */}
-              <button
-                onClick={handleScan}
-                disabled={isScanning}
-                className="w-full py-4 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[5px_5px_0px_#121212] font-display font-black text-lg flex items-center justify-center gap-3 neo-btn hover:bg-[#ffe373] disabled:opacity-50"
-              >
-                {isScanning ? (
-                  <>
-                    <RefreshCw className="w-6 h-6 animate-spin" />
-                    <span>EXTRACTING VEINCODE...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>SCAN PALM NOW</span>
-                    <ArrowRight className="w-6 h-6 stroke-[3]" />
-                  </>
-                )}
-              </button>
+              {/* Action Buttons (Neobrutalism Hover Effect) */}
+              <div className="space-y-2">
+                <button
+                  onClick={() => handleScan(true)}
+                  disabled={isScanning}
+                  className="w-full py-4 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[5px_5px_0px_#121212] font-display font-black text-lg flex items-center justify-center gap-3 neo-btn hover:bg-[#ffe26b] disabled:opacity-50"
+                >
+                  {isScanning ? (
+                    <>
+                      <RefreshCw className="w-6 h-6 animate-spin" />
+                      <span>AUTHENTICATING...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>PAY ${selectedPayItem.price.toFixed(2)} WITH PALM</span>
+                      <ArrowRight className="w-6 h-6 stroke-[3]" />
+                    </>
+                  )}
+                </button>
+              </div>
 
-              {/* Recent Activity Card */}
+              {/* Last Scan Result Card */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212]">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-black uppercase text-[#888] tracking-wider">LAST AUTHENTICATION</span>
+                  <span className="text-[11px] font-black uppercase text-[#888] tracking-wider">RECENT AUTHORIZATION</span>
                   <Clock className="w-3.5 h-3.5 text-[#888]" />
                 </div>
                 {lastScan ? (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black ${lastScan.accepted ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'}`}>
+                      <div className={`w-10 h-10 rounded-xl border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black ${
+                        lastScan.accepted ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
+                      }`}>
                         {lastScan.accepted ? '✓' : '✕'}
                       </div>
                       <div>
-                        <h4 className="font-display font-black text-base">{lastScan.username || 'Unrecognized Palm'}</h4>
-                        <p className="text-xs font-bold text-[#666]">MNHD: {lastScan.score.toFixed(4)} ({lastScan.time_ms}ms)</p>
+                        <h4 className="font-display font-black text-sm">{lastScan.username || 'Unrecognized Palm'}</h4>
+                        <p className="text-xs font-bold text-[#666]">Score: {lastScan.score.toFixed(4)} ({lastScan.time_ms}ms)</p>
                       </div>
                     </div>
-                    <span className={`px-2.5 py-1 rounded-lg border-[2px] border-black text-xs font-black shadow-[2px_2px_0px_#121212] ${lastScan.accepted ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'}`}>
-                      {lastScan.accepted ? 'MATCH' : 'REJECT'}
+                    <span className={`px-2.5 py-1 rounded-lg border-[2px] border-black text-xs font-black shadow-[2px_2px_0px_#121212] ${
+                      lastScan.accepted ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
+                    }`}>
+                      {lastScan.accepted ? 'VERIFIED' : 'FAILED'}
                     </span>
                   </div>
                 ) : (
-                  <p className="text-xs font-bold text-[#888] italic">No scans recorded yet. Press Scan Palm Now.</p>
+                  <p className="text-xs font-bold text-[#888] italic">No authorizations recorded yet.</p>
                 )}
               </div>
             </div>
           )}
 
-          {/* ══════════ SCREEN 1: ENROLL ══════════ */}
+          {/* ══════════════════════════════════════════════════════════
+              PAGE 3: 6-SAMPLE ENROLLMENT STUDIO
+             ══════════════════════════════════════════════════════════ */}
           {activeTab === 'enroll' && (
             <div className="space-y-4 animate-fadeIn">
               <div>
-                <h2 className="font-display font-black text-2xl tracking-tight">ENROLL NEW PALM</h2>
-                <p className="text-xs font-bold text-[#666]">Multi-sample registration for maximum accuracy</p>
+                <h2 className="font-display font-black text-xl tracking-tight">ENROLL PALM TEMPLATES</h2>
+                <p className="text-xs font-bold text-[#666]">6 multi-angle captures for 99.9% accuracy</p>
               </div>
 
-              {/* Username Input */}
+              {/* Username Input Card */}
               <div className="space-y-1.5">
-                <label className="text-xs font-black uppercase tracking-wider text-black">USER IDENTIFIER / NAME</label>
+                <label className="text-xs font-black uppercase tracking-wider text-black">USERNAME / USER ID</label>
                 <div className="relative">
                   <input
                     type="text"
                     value={enrollUsername}
                     onChange={e => setEnrollUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
-                    placeholder="e.g. yesh-right"
-                    className="w-full px-4 py-3.5 bg-white border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base outline-none focus:bg-[#FFFDF0]"
+                    placeholder="e.g. sepideh-palm"
+                    className="w-full px-4 py-3 bg-white border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm outline-none focus:bg-[#FFFDF0]"
                   />
-                  <div className="absolute right-3.5 top-3.5 text-xs font-black px-2 py-0.5 bg-[#FFDE59] border-[1.5px] border-black rounded-md">
+                  <div className="absolute right-3 top-2.5 text-xs font-black px-2 py-0.5 bg-[#FFDE59] border-[1.5px] border-black rounded-md">
                     ID
                   </div>
                 </div>
               </div>
 
-              {/* Progress Stepper Card */}
-              <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-3">
+              {/* 6 Step Indicators */}
+              <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-2.5">
                 <div className="flex justify-between items-center">
                   <span className="font-display font-black text-xs uppercase tracking-wider">SAMPLE PROGRESS</span>
                   <span className="text-xs font-black px-2 py-0.5 bg-[#38BDF8] border-[1.5px] border-black rounded-full">
@@ -397,14 +601,13 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* 6 Step Circles */}
                 <div className="grid grid-cols-6 gap-2">
                   {[0, 1, 2, 3, 4, 5].map(idx => {
                     const isDone = idx < enrollSamples.length;
                     return (
                       <div
                         key={idx}
-                        className={`h-11 rounded-xl border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm transition-all ${
+                        className={`h-11 rounded-xl border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm transition-all neo-btn ${
                           isDone ? 'bg-[#CCFF00] scale-105' : 'bg-[#F4F4F0] text-[#888]'
                         }`}
                       >
@@ -415,17 +618,17 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Action Buttons */}
+              {/* Action Buttons with Neobrutalism Hover Effect */}
               <div className="space-y-2.5">
                 <button
                   onClick={handleCaptureSample}
                   disabled={isCapturingSample || enrollSamples.length >= 6 || !enrollUsername.trim()}
-                  className="w-full py-4 bg-[#FF4081] text-white border-[3px] border-black rounded-2xl shadow-[5px_5px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2.5 neo-btn hover:bg-[#ff2872] disabled:opacity-50"
+                  className="w-full py-3.5 bg-[#FF4081] text-white border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm flex items-center justify-center gap-2 neo-btn hover:bg-[#ff2872] disabled:opacity-50"
                 >
                   <Camera className="w-5 h-5" />
                   <span>
                     {isCapturingSample 
-                      ? 'CAPTURING...' 
+                      ? 'CAPTURING & ENHANCING...' 
                       : enrollSamples.length >= 6 
                       ? 'ALL 6 SAMPLES COLLECTED ✓' 
                       : `CAPTURE SAMPLE [${enrollSamples.length + 1}/6]`}
@@ -438,87 +641,76 @@ export default function App() {
                   className="w-full py-3.5 bg-[#FFDE59] text-black border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe26b] disabled:opacity-40"
                 >
                   <CheckCircle2 className="w-5 h-5" />
-                  <span>SAVE ENROLLMENT TO DATABASE</span>
+                  <span>SAVE TO BIOMETRIC DATABASE</span>
                 </button>
               </div>
 
-              {/* Quality & Guidance Feedback */}
-              <div className="bg-[#38BDF8] border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212]">
-                <h4 className="font-display font-black text-xs uppercase tracking-wider mb-1">QUALITY GUIDELINES</h4>
-                <p className="text-xs font-bold text-black leading-relaxed">
-                  {enrollStatusMsg || 'Hold palm flat with fingers naturally spread. Minimum 3 samples required to save.'}
+              {/* Quality Banner */}
+              <div className="bg-[#38BDF8] border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212]">
+                <h4 className="font-display font-black text-xs uppercase mb-0.5">POSITIONING GUIDE</h4>
+                <p className="text-xs font-bold text-black leading-snug">
+                  {enrollStatusMsg || 'Hold palm flat ~10–15cm above sensor. Minimum 3 samples required to save.'}
                 </p>
               </div>
             </div>
           )}
 
-          {/* ══════════ SCREEN 2: USERS ══════════ */}
+          {/* ══════════════════════════════════════════════════════════
+              PAGE 4: USER DIRECTORY & PROFILES (Dribbble List Style)
+             ══════════════════════════════════════════════════════════ */}
           {activeTab === 'users' && (
-            <div className="space-y-4 animate-fadeIn">
-              <div className="flex justify-between items-end">
-                <div>
-                  <h2 className="font-display font-black text-2xl tracking-tight">ENROLLED USERS</h2>
-                  <p className="text-xs font-bold text-[#666]">{users.length} registered biometric profiles</p>
-                </div>
-                <button
-                  onClick={() => setActiveTab('enroll')}
-                  className="px-3 py-1.5 bg-[#FFDE59] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212] font-display font-black text-xs flex items-center gap-1.5 neo-btn"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>NEW</span>
-                </button>
-              </div>
-
-              {/* Search Bar */}
+            <div className="space-y-3.5 animate-fadeIn">
+              
+              {/* Search Bar matching Dribbble Reference */}
               <div className="relative">
-                <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-[#888]" />
+                <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-black stroke-[3]" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search enrolled profiles..."
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border-[3px] border-black rounded-xl shadow-[3px_3px_0px_#121212] font-bold text-xs outline-none"
+                  placeholder="Search ..."
+                  className="w-full pl-10 pr-12 py-2.5 bg-white border-[3px] border-black rounded-2xl shadow-[3px_3px_0px_#121212] font-display font-bold text-sm outline-none"
                 />
+                <button 
+                  onClick={() => setActiveTab('enroll')}
+                  className="absolute right-1.5 top-1.5 w-8 h-8 bg-[#FFDE59] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black neo-btn"
+                >
+                  <Plus className="w-4 h-4 stroke-[3]" />
+                </button>
               </div>
 
-              {/* User Card List */}
-              <div className="space-y-3">
+              {/* Users List Cards */}
+              <div className="space-y-2.5">
                 {filteredUsers.length > 0 ? (
                   filteredUsers.map((u, i) => {
-                    const avatarBg = [
-                      'bg-[#38BDF8]', 
-                      'bg-[#FFDE59]', 
-                      'bg-[#CCFF00]', 
-                      'bg-[#FF4081]', 
-                      'bg-[#A855F7]'
-                    ][i % 5];
+                    const avatarColor = ['bg-[#FFDE59]', 'bg-[#38BDF8]', 'bg-[#CCFF00]', 'bg-[#FF4081]', 'bg-[#A855F7]'][i % 5];
+                    const randomStars = [35, 10, 20, 40, 75][i % 5];
+                    const samplePhrases = ['No time to waste!', 'Hey! Ready to pay.', 'Start something that matters!', 'I am ready!', 'Ready for a win!'];
 
                     return (
                       <div
                         key={u.username}
-                        className="bg-white border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] flex items-center justify-between"
+                        className="bg-white border-[3px] border-black rounded-2xl p-3 shadow-[3px_3px_0px_#121212] flex items-center justify-between neo-card neo-card-hover"
                       >
                         <div className="flex items-center gap-3">
-                          <div className={`w-11 h-11 rounded-full ${avatarBg} border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-base uppercase`}>
-                            {u.username.charAt(0)}
+                          <div className={`w-11 h-11 rounded-full ${avatarColor} border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-lg`}>
+                            👤
                           </div>
                           <div>
-                            <h4 className="font-display font-black text-base leading-snug">{u.username}</h4>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[11px] font-black px-2 py-0.2 bg-[#F4F4F0] border border-black rounded-md">
-                                {u.sample_count} Samples
-                              </span>
-                              <span className="text-[10px] font-bold text-[#888]">
-                                {u.enrolled_at ? u.enrolled_at.slice(0, 10) : 'Active'}
-                              </span>
+                            <h4 className="font-display font-black text-sm leading-tight">{u.username}</h4>
+                            <p className="text-[10px] font-bold text-[#666]">{samplePhrases[i % samplePhrases.length]}</p>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <Star className="w-3 h-3 fill-[#FFDE59] text-black" />
+                              <span className="text-[10px] font-black">{randomStars} Stars</span>
+                              <span className="text-[9px] text-[#888] ml-1">• {u.sample_count} Samples</span>
                             </div>
                           </div>
                         </div>
 
                         <button
                           onClick={() => setDeleteTarget(u.username)}
-                          className="p-2.5 bg-[#FF4081] text-white border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212] neo-btn hover:bg-[#ff2872]"
-                          title="Delete user"
+                          className="w-8 h-8 rounded-xl bg-[#FF4081] text-white border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center neo-btn hover:bg-[#ff2872]"
+                          title="Delete profile"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -535,12 +727,14 @@ export default function App() {
             </div>
           )}
 
-          {/* ══════════ SCREEN 3: ADMIN & DIAGNOSTICS ══════════ */}
+          {/* ══════════════════════════════════════════════════════════
+              PAGE 5: SYSTEM & ACCURACY DIAGNOSTICS
+             ══════════════════════════════════════════════════════════ */}
           {activeTab === 'admin' && (
-            <div className="space-y-4 animate-fadeIn">
+            <div className="space-y-3.5 animate-fadeIn">
               <div>
-                <h2 className="font-display font-black text-2xl tracking-tight">SYSTEM DIAGNOSTICS</h2>
-                <p className="text-xs font-bold text-[#666]">Hardware status & biometric separation matrices</p>
+                <h2 className="font-display font-black text-xl tracking-tight">SYSTEM DIAGNOSTICS</h2>
+                <p className="text-xs font-bold text-[#666]">Hardware status & biometric separation matrix</p>
               </div>
 
               {/* Accuracy Report Trigger Card */}
@@ -549,29 +743,29 @@ export default function App() {
                 className="bg-[#FFDE59] border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] cursor-pointer neo-btn flex items-center justify-between"
               >
                 <div>
-                  <h3 className="font-display font-black text-base">BIOMETRIC ACCURACY REPORT</h3>
-                  <p className="text-xs font-bold text-[#444]">View Self-Match & Cross-Match separation</p>
+                  <h3 className="font-display font-black text-sm">ACCURACY REPORT MATRIX</h3>
+                  <p className="text-xs font-bold text-[#444]">View Self-Match & Cross-Match scores</p>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-white border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black">
+                <div className="w-9 h-9 rounded-xl bg-white border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black">
                   📊
                 </div>
               </div>
 
-              {/* Hardware Stack */}
-              <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-2.5">
-                <h4 className="font-display font-black text-xs uppercase tracking-wider text-[#888]">HARDWARE & COMPUTE</h4>
+              {/* Hardware Stack Grid */}
+              <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-2">
+                <h4 className="font-display font-black text-xs uppercase tracking-wider text-[#888]">COMPUTE SPECIFICATIONS</h4>
                 <div className="grid grid-cols-2 gap-2 text-xs font-black">
                   <div className="p-2.5 bg-[#FFFDF0] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212]">
-                    <span className="block text-[10px] text-[#666]">CAMERA</span>
-                    <span>{cameraReady ? 'NoIR Camera (Active)' : 'Standalone Mock'}</span>
+                    <span className="block text-[10px] text-[#666]">CAMERA SENSOR</span>
+                    <span>{cameraReady ? 'RPi NoIR v2 (Live)' : 'Mock / Offline'}</span>
                   </div>
                   <div className="p-2.5 bg-[#FFFDF0] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212]">
-                    <span className="block text-[10px] text-[#666]">MATCHER</span>
-                    <span>4 CPU Core Pool</span>
+                    <span className="block text-[10px] text-[#666]">PARALLEL MATCHER</span>
+                    <span>4-Core Worker Pool</span>
                   </div>
                   <div className="p-2.5 bg-[#FFFDF0] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212]">
-                    <span className="block text-[10px] text-[#666]">LAYER 1 SIGNATURE</span>
-                    <span>16-Float RAM Vector</span>
+                    <span className="block text-[10px] text-[#666]">LAYER 1 RAM FILTER</span>
+                    <span>16-Float Euclidean</span>
                   </div>
                   <div className="p-2.5 bg-[#FFFDF0] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212]">
                     <span className="block text-[10px] text-[#666]">THRESHOLD</span>
@@ -580,27 +774,28 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Database Status */}
-              <div className="bg-[#CCFF00] border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] flex justify-between items-center">
+              {/* Database Storage Card */}
+              <div className="bg-[#CCFF00] border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] flex justify-between items-center">
                 <div>
-                  <h4 className="font-display font-black text-sm uppercase">SQLite Storage Engine</h4>
+                  <h4 className="font-display font-black text-sm uppercase">SQLite Storage Vault</h4>
                   <p className="text-xs font-bold text-black">
                     {users.length} Users • {users.reduce((acc, u) => acc + u.sample_count, 0)} Templates stored (zlib)
                   </p>
                 </div>
-                <Database className="w-7 h-7 text-black" />
+                <Database className="w-6 h-6 text-black" />
               </div>
             </div>
           )}
         </main>
 
-        {/* ── BOTTOM NAVIGATION BAR (MATCHING DRIBBBLE REFERENCE) ── */}
-        <nav className="absolute bottom-0 left-0 right-0 h-[80px] bg-[#FFFDF0] border-t-[3px] border-black px-3 flex items-center justify-around z-20">
+        {/* ── BOTTOM NAVIGATION (Matching Dribbble Reference: Friends, Challenges, Stats) ── */}
+        <nav className="absolute bottom-0 left-0 right-0 h-[76px] bg-[#FFFDF0] border-t-[3px] border-black px-3 flex items-center justify-around z-20">
           {[
+            { id: 'landing', label: 'Home', icon: Compass },
             { id: 'scan', label: 'Scan', icon: Scan },
             { id: 'enroll', label: 'Enroll', icon: UserPlus },
-            { id: 'users', label: 'Users', icon: Users },
-            { id: 'admin', label: 'System', icon: Settings },
+            { id: 'users', label: 'Friends', icon: Users },
+            { id: 'admin', label: 'Stats', icon: Settings },
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -608,20 +803,20 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`flex flex-col items-center justify-center transition-all ${
+                className={`flex flex-col items-center justify-center transition-all neo-btn ${
                   isActive
-                    ? 'px-5 py-1.5 bg-[#FFDE59] border-[2.5px] border-black rounded-full shadow-[2.5px_2.5px_0px_#121212]'
-                    : 'text-[#888] hover:text-black'
+                    ? 'px-4 py-1.5 bg-[#FFDE59] border-[2.5px] border-black rounded-full shadow-[2.5px_2.5px_0px_#121212]'
+                    : 'text-[#666] hover:text-black'
                 }`}
               >
-                <Icon className="w-5 h-5 stroke-[2.5]" />
-                <span className="text-[11px] font-display font-black tracking-tight">{tab.label}</span>
+                <Icon className="w-4 h-4 stroke-[2.5]" />
+                <span className="text-[10px] font-display font-black tracking-tight">{tab.label}</span>
               </button>
             );
           })}
         </nav>
 
-        {/* ── FLOATING (+) ENROLL BUTTON (SHOWN ON USERS TAB) ── */}
+        {/* ── FLOATING ACTION (+) BUTTON ON USERS VIEW ── */}
         {activeTab === 'users' && (
           <button
             onClick={() => setActiveTab('enroll')}
@@ -634,7 +829,7 @@ export default function App() {
         {/* ── FULLSCREEN RESULT OVERLAY ── */}
         {resultOverlay && (
           <div className={`absolute inset-0 z-50 p-6 flex flex-col items-center justify-center animate-fadeIn ${
-            resultOverlay.accepted ? 'bg-[#00F0FF]' : 'bg-[#FF4081]'
+            resultOverlay.accepted ? 'bg-[#38BDF8]' : 'bg-[#FF4081]'
           }`}>
             <div className="w-full bg-white border-[4px] border-black rounded-3xl p-6 shadow-[8px_8px_0px_#121212] text-center space-y-4">
               <div className={`w-20 h-20 mx-auto rounded-full border-[3px] border-black shadow-[4px_4px_0px_#121212] flex items-center justify-center font-display font-black text-3xl ${
@@ -645,17 +840,19 @@ export default function App() {
 
               <div>
                 <h3 className="font-display font-black text-2xl tracking-tight uppercase">
-                  {resultOverlay.accepted ? 'AUTHENTICATED' : 'NOT RECOGNISED'}
+                  {resultOverlay.accepted ? (resultOverlay.item_name ? 'PAYMENT APPROVED' : 'AUTHENTICATED') : 'NOT RECOGNISED'}
                 </h3>
                 <p className="font-bold text-sm text-[#444] mt-1">
-                  {resultOverlay.accepted ? `Welcome, ${resultOverlay.username}` : 'Palm does not match enrolled records'}
+                  {resultOverlay.accepted 
+                    ? (resultOverlay.item_name ? `Paid $${resultOverlay.amount?.toFixed(2)} for ${resultOverlay.item_name}` : `Welcome, ${resultOverlay.username}`)
+                    : 'Palm does not match enrolled records'}
                 </p>
               </div>
 
-              {/* Confidence Metric Gauge */}
+              {/* Confidence Gauge */}
               <div className="bg-[#FFFDF0] border-[2px] border-black rounded-xl p-3 shadow-[2px_2px_0px_#121212] space-y-1 text-left">
                 <div className="flex justify-between text-xs font-black">
-                  <span>MNHD MATCH SCORE</span>
+                  <span>MNHD SCORE</span>
                   <span>{resultOverlay.score.toFixed(4)}</span>
                 </div>
                 <div className="w-full h-3.5 bg-[#E2E8F0] border-[1.5px] border-black rounded-full overflow-hidden">
@@ -666,7 +863,7 @@ export default function App() {
                 </div>
                 <div className="flex justify-between text-[10px] font-bold text-[#888] pt-0.5">
                   <span>Threshold: &lt; 0.3800</span>
-                  <span>Time: {resultOverlay.time_ms}ms</span>
+                  <span>Latency: {resultOverlay.time_ms}ms</span>
                 </div>
               </div>
 
@@ -684,9 +881,9 @@ export default function App() {
         {deleteTarget && (
           <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-6 animate-fadeIn">
             <div className="w-full bg-white border-[4px] border-black rounded-3xl p-6 shadow-[6px_6px_0px_#121212] text-center space-y-4">
-              <h3 className="font-display font-black text-xl">DELETE USER?</h3>
+              <h3 className="font-display font-black text-xl">DELETE PROFILE?</h3>
               <p className="text-sm font-bold text-[#666]">
-                Are you sure you want to deactivate <span className="text-[#FF4081] font-black font-display">'{deleteTarget}'</span>?
+                Deactivate biometric template for <span className="text-[#FF4081] font-black">'{deleteTarget}'</span>?
               </p>
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <button
@@ -711,13 +908,13 @@ export default function App() {
           <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-5 animate-fadeIn">
             <div className="w-full max-h-[90%] bg-white border-[4px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] flex flex-col space-y-3 overflow-hidden">
               <div className="flex justify-between items-center border-b-2 border-black pb-2">
-                <h3 className="font-display font-black text-lg">ACCURACY REPORT</h3>
+                <h3 className="font-display font-black text-base">BIOMETRIC MATRIX REPORT</h3>
                 <button onClick={() => setReportModalOpen(false)} className="font-black text-lg px-2">✕</button>
               </div>
 
               <div className="overflow-y-auto space-y-3 flex-1 text-xs font-bold pr-1">
                 <div>
-                  <h4 className="font-display font-black text-xs uppercase mb-1">Self-Match Verification</h4>
+                  <h4 className="font-display font-black text-xs uppercase mb-1">Self-Match (Intra-User)</h4>
                   {reportData?.self_matches?.length ? (
                     <div className="space-y-1">
                       {reportData.self_matches.map(([u, mn, av, mx, q]) => (
