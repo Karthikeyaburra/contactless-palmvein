@@ -13,11 +13,19 @@ import time
 import base64
 import cv2
 import numpy as np
+import mimetypes
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+# Ensure proper MIME types on all OS platforms (especially Windows)
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("application/json", ".json")
 
 # Pipeline imports
 from db_manager import (
@@ -34,8 +42,56 @@ from mediapipe_img import (
 )
 from gabor import extract_veincode, match_templates, MATCH_THRESHOLD
 
-# App & Directories
-app = FastAPI(title="Palm Vein Biometrics API")
+from contextlib import asynccontextmanager
+
+# Directories
+CAPTURE_DIR = "captures"
+ROI_DIR = "roi_clahe"
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(CAPTURE_DIR, exist_ok=True)
+os.makedirs(ROI_DIR, exist_ok=True)
+
+# Hardware & Engine Globals
+engine = None
+landmarker = None
+picam2 = None
+CAMERA_AVAILABLE = False
+preview_cfg = None
+still_cfg = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global engine, landmarker, picam2, CAMERA_AVAILABLE, preview_cfg, still_cfg
+    init_db()
+    engine = SearchEngine(n_workers=4)
+
+    try:
+        landmarker = build_landmarker(DEFAULT_MODEL_PATH)
+    except Exception as e:
+        print(f"Landmarker warning: {e}")
+
+    try:
+        from picamera2 import Picamera2
+        picam2 = Picamera2()
+        preview_cfg = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+        still_cfg = picam2.create_still_configuration(main={"size": (1640, 1232), "format": "RGB888"})
+        picam2.configure(preview_cfg)
+        picam2.start()
+        picam2.set_controls({"AeEnable": False, "ExposureTime": 5000, "AnalogueGain": 1.0})
+        CAMERA_AVAILABLE = True
+    except Exception:
+        picam2 = None
+        CAMERA_AVAILABLE = False
+
+    yield
+
+    if engine:
+        engine.shutdown()
+    if CAMERA_AVAILABLE and picam2 is not None:
+        picam2.stop()
+
+# App & Middleware
+app = FastAPI(title="Palm Vein Biometrics API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,37 +100,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-CAPTURE_DIR = "captures"
-ROI_DIR = "roi_clahe"
-STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-os.makedirs(CAPTURE_DIR, exist_ok=True)
-os.makedirs(ROI_DIR, exist_ok=True)
-
-# Hardware & Engine Init
-init_db()
-engine = SearchEngine(n_workers=4)
-
-landmarker = None
-try:
-    landmarker = build_landmarker(DEFAULT_MODEL_PATH)
-except Exception as e:
-    print(f"Landmarker warning: {e}")
-
-picam2 = None
-CAMERA_AVAILABLE = False
-try:
-    from picamera2 import Picamera2
-    picam2 = Picamera2()
-    preview_cfg = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
-    still_cfg = picam2.create_still_configuration(main={"size": (1640, 1232), "format": "RGB888"})
-    picam2.configure(preview_cfg)
-    picam2.start()
-    picam2.set_controls({"AeEnable": False, "ExposureTime": 5000, "AnalogueGain": 1.0})
-    CAMERA_AVAILABLE = True
-except Exception:
-    picam2 = None
-    CAMERA_AVAILABLE = False
 
 # In-memory temporary enrollment cache: username -> list of veincodes
 enrollment_cache = {}
@@ -272,19 +297,22 @@ if os.path.exists(STATIC_DIR):
     async def serve_spa(full_path: str):
         file_path = os.path.join(STATIC_DIR, full_path)
         if os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+            media_type, _ = mimetypes.guess_type(file_path)
+            return FileResponse(file_path, media_type=media_type or "application/octet-stream")
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"), media_type="text/html")
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     import uvicorn
     import webbrowser
     print("\n" + "=" * 55)
-    print("  🚀 PALM VEIN RECOGNITION — NEOBRUTALISM WEB APP")
-    print("  Server running at: http://localhost:8000")
+    print("  [+] PALM VEIN RECOGNITION - NEOBRUTALISM WEB APP")
+    print("  [+] Server running at: http://localhost:8000")
     print("=" * 55 + "\n")
     try:
         webbrowser.open("http://localhost:8000")
     except Exception:
         pass
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, log_level="info")
