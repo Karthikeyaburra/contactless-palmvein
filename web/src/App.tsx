@@ -27,9 +27,7 @@ import {
   Award, 
   Layers, 
   Smartphone, 
-  Coins, 
-  Send, 
-  Receipt 
+  Coins 
 } from 'lucide-react';
 
 interface User {
@@ -54,7 +52,7 @@ interface ReportData {
   cross_matches?: Array<[string, number, string]>;
 }
 
-// ── Custom Palm Vein SVG Icon (Detailed 5-finger palm with biometric vein grid) ──
+// ── Custom Palm Vein SVG Icon (Clean 5-finger palm with sub-dermal vein tracks) ──
 function PalmIcon({ className = "w-12 h-12 text-black", animated = false }: { className?: string; animated?: boolean }) {
   return (
     <svg 
@@ -88,29 +86,6 @@ function PalmIcon({ className = "w-12 h-12 text-black", animated = false }: { cl
   );
 }
 
-// ── Hand-Drawn Scribble / Highlighter SVG for Active Nav & Badges (from Dribbble) ──
-function ScribbleBadge({ children, color = "#FFDE59", className = "" }: { children: React.ReactNode; color?: string; className?: string }) {
-  return (
-    <div className={`relative inline-flex items-center justify-center ${className}`}>
-      {/* Asymmetric hand-drawn scribble background */}
-      <svg 
-        className="absolute inset-0 w-full h-full -z-0 scale-110 pointer-events-none" 
-        viewBox="0 0 120 45" 
-        preserveAspectRatio="none"
-      >
-        <path 
-          d="M 6,24 C 18,7 48,5 98,10 C 114,12 118,22 110,33 C 98,42 42,44 14,38 C 4,36 2,30 6,24 Z" 
-          fill={color} 
-          stroke="#121212" 
-          strokeWidth="2.5" 
-          strokeLinejoin="round"
-        />
-      </svg>
-      <div className="relative z-10">{children}</div>
-    </div>
-  );
-}
-
 export default function App() {
   // Navigation: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'
   const [activeTab, setActiveTab] = useState<'landing' | 'scan' | 'enroll' | 'users' | 'admin'>('landing');
@@ -122,7 +97,7 @@ export default function App() {
   const [selectedAuthAction, setSelectedAuthAction] = useState<{ id: string; name: string; desc: string; icon: string }>({
     id: 'pay',
     name: 'Palm Pay Auth',
-    desc: 'Instant Token Transfer',
+    desc: 'Payment Token',
     icon: '💳'
   });
 
@@ -318,7 +293,7 @@ export default function App() {
       }
     } catch {
       setReportData({
-        self_matches: [['yesh-right', 0.11, 0.22, 0.33, 'GOOD'], ['yesh-left', 0.10, 0.21, 0.32, 'GOOD']],
+        self_matches: [['yesh-right', 0.11, 0.22, 0.33, 'GOOD']],
         cross_matches: [['yesh-right vs yesh-left', 0.5026, 'OK']],
       });
     }
@@ -327,6 +302,17 @@ export default function App() {
   const filteredUsers = users.filter(u => 
     u.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Tabs index for sliding indicator
+  const tabList: Array<{ id: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'; label: string; icon: any }> = [
+    { id: 'landing', label: 'Home', icon: Compass },
+    { id: 'scan', label: 'Scan', icon: Scan },
+    { id: 'enroll', label: 'Enroll', icon: UserPlus },
+    { id: 'users', label: 'Friends', icon: Users },
+    { id: 'admin', label: 'Stats', icon: Settings },
+  ];
+
+  const activeTabIdx = tabList.findIndex(t => t.id === activeTab);
 
   return (
     <div className="min-h-screen bg-dribbble-yellow flex justify-center items-center p-0 sm:p-6 text-[#121212] select-none font-sans">
@@ -366,12 +352,10 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            <ScribbleBadge color="#38BDF8">
-              <div className="px-3 py-0.5 text-xs font-black flex items-center gap-1">
-                <Star className="w-3.5 h-3.5 fill-[#FFDE59] text-black" />
-                <span>15 Stars</span>
-              </div>
-            </ScribbleBadge>
+            <div className="px-2.5 py-1 bg-[#38BDF8] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] text-xs font-black flex items-center gap-1">
+              <Star className="w-3.5 h-3.5 fill-[#FFDE59] text-black" />
+              <span>15 Stars</span>
+            </div>
 
             <button 
               onClick={() => setActiveTab('landing')}
@@ -407,7 +391,7 @@ export default function App() {
               {/* Dynamic Animated Fintech Hero Card */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center text-center">
                 
-                {/* Floating Geometric Elements & Payment Badges */}
+                {/* Floating Geometric Elements & Badges */}
                 <div className="absolute top-2 left-3 w-8 h-8 border-[2px] border-black bg-[#FFDE59] rounded-md grid grid-cols-2 grid-rows-2">
                   <div className="border-r border-b border-black"></div>
                   <div className="border-b border-black"></div>
@@ -421,7 +405,7 @@ export default function App() {
                 {/* Illustrated Payment Scene: Phone, Hand Wave, and Floating Coins */}
                 <div className="relative my-3 w-full flex items-center justify-center">
                   
-                  {/* Floating Gold Coin 1 */}
+                  {/* Floating Gold Coin */}
                   <div className="absolute -left-1 top-2 w-9 h-9 rounded-full bg-[#FFDE59] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm animate-bounce">
                     🪙
                   </div>
@@ -452,7 +436,7 @@ export default function App() {
                   <p className="text-xs font-bold text-[#666]">Zero cards, zero phones. Complete contactless palm security.</p>
                 </div>
 
-                {/* Primary CTA Button (Scribble-style press animation) */}
+                {/* Primary CTA Button */}
                 <button
                   onClick={() => setActiveTab('scan')}
                   className="mt-2 w-full py-3.5 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe373]"
@@ -472,7 +456,7 @@ export default function App() {
                   <div className="flex text-xs">⭐⭐⭐⭐☆</div>
                 </div>
 
-                {/* 3 Metric Blocks (Days : Hours : Minutes style from reference) */}
+                {/* 3 Metric Blocks (Days : Hours : Minutes style) */}
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
                     <span className="font-display font-black text-2xl block leading-none">1</span>
@@ -858,39 +842,42 @@ export default function App() {
           )}
         </main>
 
-        {/* ── BOTTOM NAVIGATION (Matching Dribbble Reference: Friends, Challenges, Stats with Scribble Highlighter) ── */}
-        <nav className="absolute bottom-0 left-0 right-0 h-[76px] bg-[#FFFDF0] border-t-[3px] border-black px-3 flex items-center justify-around z-20">
-          {[
-            { id: 'landing', label: 'Challenges', icon: Compass },
-            { id: 'scan', label: 'Scan', icon: Scan },
-            { id: 'enroll', label: 'Enroll', icon: UserPlus },
-            { id: 'users', label: 'Friends', icon: Users },
-            { id: 'admin', label: 'Stats', icon: Settings },
-          ].map(tab => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`flex flex-col items-center justify-center transition-all neo-btn group relative px-2.5 py-1`}
-              >
-                {isActive ? (
-                  <ScribbleBadge color="#FFDE59">
-                    <div className="px-3 py-1 flex items-center gap-1.5">
-                      <Icon className="w-4 h-4 stroke-[2.5] text-black" />
-                      <span className="text-[11px] font-display font-black tracking-tight text-black">{tab.label}</span>
-                    </div>
-                  </ScribbleBadge>
-                ) : (
-                  <div className="flex flex-col items-center text-[#666] group-hover:text-black transition-colors">
-                    <Icon className="w-4 h-4 stroke-[2.5]" />
-                    <span className="text-[10px] font-display font-black tracking-tight mt-0.5">{tab.label}</span>
-                  </div>
-                )}
-              </button>
-            );
-          })}
+        {/* ── SMOOTH SLIDING NEOBRUTALISM BOTTOM NAVBAR ── */}
+        <nav className="absolute bottom-0 left-0 right-0 h-[76px] bg-[#FFFDF0] border-t-[3px] border-black px-2 flex items-center z-20">
+          <div className="relative w-full h-[52px] flex items-center">
+            
+            {/* Sliding Highlight Pill with Bounce Spring */}
+            <div 
+              className="absolute top-0 bottom-0 bg-[#FFDE59] border-[2.5px] border-black rounded-full shadow-[2.5px_2.5px_0px_#121212] transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] pointer-events-none"
+              style={{
+                width: '18.4%',
+                left: `calc(${activeTabIdx * 20}% + 0.8%)`,
+              }}
+            />
+
+            {/* Nav Tabs */}
+            {tabList.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative z-10 flex-1 h-full flex flex-col items-center justify-center transition-all group neo-btn`}
+                >
+                  <Icon className={`w-4 h-4 stroke-[2.5] transition-transform duration-200 ${
+                    isActive ? 'scale-110 text-black' : 'text-[#666] group-hover:text-black group-hover:scale-105'
+                  }`} />
+                  <span className={`text-[10px] font-display font-black tracking-tight mt-0.5 transition-colors ${
+                    isActive ? 'text-black font-black' : 'text-[#666] group-hover:text-black'
+                  }`}>
+                    {tab.label}
+                  </span>
+                </button>
+              );
+            })}
+
+          </div>
         </nav>
 
         {/* ── FLOATING ACTION (+) BUTTON ON USERS VIEW ── */}
