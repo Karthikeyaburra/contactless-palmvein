@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { 
   Scan, 
   UserPlus, 
   Users, 
   Settings, 
-  ShieldCheck, 
   CheckCircle2, 
   XCircle, 
   Camera, 
@@ -22,13 +21,10 @@ import {
   Star, 
   Compass, 
   Lock, 
-  ChevronRight, 
-  Flame, 
-  Award, 
-  Layers, 
   Smartphone, 
   Coins,
-  AlertTriangle
+  AlertTriangle,
+  Timer
 } from 'lucide-react';
 
 interface User {
@@ -87,6 +83,15 @@ function PalmIcon({ className = "w-12 h-12 text-black", animated = false }: { cl
   );
 }
 
+const SAMPLE_GUIDANCE = [
+  "Step 1: Hold palm flat, centered ~10-15cm above sensor",
+  "Step 2: Tilt palm slightly to the LEFT (~5 degrees)",
+  "Step 3: Tilt palm slightly to the RIGHT (~5 degrees)",
+  "Step 4: Raise palm slightly HIGHER (~15-18cm)",
+  "Step 5: Spread fingers slightly wider",
+  "Step 6: Hold palm flat for final confirmation",
+];
+
 export default function App() {
   // Navigation: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'
   const [activeTab, setActiveTab] = useState<'landing' | 'scan' | 'enroll' | 'users' | 'admin'>('landing');
@@ -103,15 +108,17 @@ export default function App() {
     icon: '💳'
   });
 
-  // Scanning State
+  // Scanning State & Countdown
   const [isScanning, setIsScanning] = useState(false);
+  const [scanCountdown, setScanCountdown] = useState<number | null>(null);
   const [lastScan, setLastScan] = useState<ScanResult | null>(null);
   const [resultOverlay, setResultOverlay] = useState<ScanResult | null>(null);
 
-  // Enrollment State
+  // Enrollment State & 5-Second Countdown
   const [enrollUsername, setEnrollUsername] = useState('');
   const [enrollSamples, setEnrollSamples] = useState<Array<{ vr_mean: number; thumb: string }>>([]);
   const [isCapturingSample, setIsCapturingSample] = useState(false);
+  const [enrollCountdown, setEnrollCountdown] = useState<number | null>(null);
   const [enrollStatusMsg, setEnrollStatusMsg] = useState('');
 
   // Modals & Toasts
@@ -159,9 +166,17 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Trigger Real Scan
-  const handleScan = async (actionType = 'Palm Pay Auth') => {
-    if (isScanning) return;
+  // Trigger Real Scan with 3-Second Countdown
+  const handleScanWithCountdown = async (actionType = 'Palm Pay Auth') => {
+    if (isScanning || scanCountdown !== null) return;
+    
+    // 3-Second countdown
+    setScanCountdown(3);
+    for (let i = 3; i > 0; i--) {
+      setScanCountdown(i);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    setScanCountdown(null);
     setIsScanning(true);
 
     try {
@@ -194,16 +209,26 @@ export default function App() {
     }
   };
 
-  // Live Camera Sample Capture
-  const handleCaptureSample = async () => {
-    if (isCapturingSample || enrollSamples.length >= 6) return;
+  // Live Camera Sample Capture with 5-Second Countdown
+  const handleCaptureSampleWithCountdown = async () => {
+    if (isCapturingSample || enrollCountdown !== null || enrollSamples.length >= 6) return;
     const cleanUname = enrollUsername.trim().toLowerCase();
     if (!cleanUname) {
       showToast('Enter a username or ID first!', 'warn');
       return;
     }
+
+    const currentHint = SAMPLE_GUIDANCE[enrollSamples.length] || 'Hold palm steady ~10-15cm above sensor';
+    setEnrollStatusMsg(`${currentHint} (Capturing in 5 seconds...)`);
+
+    // 5-Second Timer Countdown
+    for (let i = 5; i > 0; i--) {
+      setEnrollCountdown(i);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    setEnrollCountdown(null);
     setIsCapturingSample(true);
-    setEnrollStatusMsg('Capturing frame from camera & computing Gabor VeinCode...');
+    setEnrollStatusMsg('📸 Snapping frame & computing Gabor VeinCode...');
 
     try {
       const res = await fetch('/api/enroll/sample', {
@@ -214,7 +239,8 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setEnrollSamples(prev => [...prev, { vr_mean: data.vr_mean || 0.5, thumb: data.thumb || '' }]);
-        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured! Place hand at slightly different angle for next.`);
+        const nextHint = SAMPLE_GUIDANCE[enrollSamples.length + 1] || 'Ready for next capture';
+        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured! Next: ${nextHint}`);
         showToast(`Sample ${enrollSamples.length + 1}/6 captured from camera!`, 'success');
       } else {
         const err = await res.json();
@@ -300,7 +326,6 @@ export default function App() {
     u.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Tabs list for sliding navbar
   const tabList: Array<{ id: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'; label: string; icon: any }> = [
     { id: 'landing', label: 'Home', icon: Compass },
     { id: 'scan', label: 'Scan', icon: Scan },
@@ -314,7 +339,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-dribbble-yellow flex justify-center items-center p-0 sm:p-6 text-[#121212] select-none font-sans">
       
-      {/* ── PHONE CONTAINER (480px Portrait Neobrutalism Frame) ── */}
+      {/* ── PHONE CONTAINER ── */}
       <div className="w-full max-w-[480px] min-h-screen sm:min-h-[854px] sm:h-[854px] bg-[#FFFDF0] border-x-0 sm:border-[4px] border-black sm:rounded-[36px] sm:shadow-[10px_10px_0px_#121212] flex flex-col relative overflow-hidden bg-neo-cream">
 
         {/* ── TOP STATUS / SERVICE BAR ── */}
@@ -383,20 +408,19 @@ export default function App() {
         <main className="flex-1 overflow-y-auto px-5 py-4 pb-28 space-y-4">
 
           {/* ══════════════════════════════════════════════════════════
-              PAGE 1: ANIMATED PAYMENT & FINTECH LANDING PAGE
+              PAGE 1: ANIMATED LANDING PAGE
              ══════════════════════════════════════════════════════════ */}
           {activeTab === 'landing' && (
             <div className="space-y-4 animate-fadeIn">
               
-              {/* Camera Connection Warning if camera is missing */}
               {!cameraReady && (
                 <div className="bg-[#FF7A00] text-white border-[3px] border-black rounded-2xl p-3 shadow-[3px_3px_0px_#121212] flex items-center gap-2.5 text-xs font-black">
                   <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-                  <span>Camera not detected. Connect Raspberry Pi NoIR Camera or USB Webcam.</span>
+                  <span>Camera not detected. Connect Raspberry Pi NoIR Camera.</span>
                 </div>
               )}
 
-              {/* Dynamic Animated Fintech Hero Card */}
+              {/* Hero Card */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center text-center">
                 
                 <div className="absolute top-2 left-3 w-8 h-8 border-[2px] border-black bg-[#FFDE59] rounded-md grid grid-cols-2 grid-rows-2">
@@ -406,7 +430,7 @@ export default function App() {
                 </div>
 
                 <div className="absolute top-3 right-3 px-2 py-0.5 bg-[#38BDF8] border-[2px] border-black rounded-lg text-[10px] font-black shadow-[2px_2px_0px_#121212] animate-float">
-                  💳 LIVE BIOMETRICS
+                  ⏱️ 5s AUTO-TIMER
                 </div>
 
                 {/* Smartphone Terminal Card */}
@@ -426,65 +450,24 @@ export default function App() {
                   </div>
 
                   <div className="absolute -right-1 bottom-4 px-2.5 py-1 rounded-xl bg-[#FF4081] text-white border-[2px] border-black shadow-[2px_2px_0px_#121212] text-[10px] font-black flex items-center gap-1 animate-wiggle">
-                    <Zap className="w-3 h-3 fill-white" />
-                    <span>0.28s Instant</span>
+                    <Timer className="w-3 h-3 text-white" />
+                    <span>5s Timer</span>
                   </div>
                 </div>
 
-                {/* Dribbble Typography Headline */}
                 <div className="space-y-1 my-2">
                   <h2 className="font-display font-black text-xl leading-tight">
                     Sub-dermal infrared <span className="text-[#FF4081]">palm authentication</span>
                   </h2>
-                  <p className="text-xs font-bold text-[#666]">Real hardware capture using Gabor wavelets &amp; MNHD matching.</p>
+                  <p className="text-xs font-bold text-[#666]">5-second countdown timer for perfect multi-angle hand positioning.</p>
                 </div>
 
-                {/* Primary CTA Button */}
                 <button
                   onClick={() => setActiveTab('scan')}
                   className="mt-2 w-full py-3.5 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe373]"
                 >
                   <span>Open Palm Scanner</span>
                   <ArrowRight className="w-5 h-5 stroke-[3]" />
-                </button>
-              </div>
-
-              {/* Status / Metric Card */}
-              <div className="bg-white border-[3px] border-black rounded-3xl p-4 shadow-[5px_5px_0px_#121212] space-y-3">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h3 className="font-display font-black text-sm">Biometric Engine Status</h3>
-                    <p className="text-[11px] font-bold text-[#666]">4-Core Parallel MNHD</p>
-                  </div>
-                  <div className="flex text-xs">⭐⭐⭐⭐⭐</div>
-                </div>
-
-                {/* 3 Metric Blocks */}
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">0.38</span>
-                    <span className="text-[10px] font-black text-[#FF4081] uppercase">Threshold</span>
-                  </div>
-                  <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">{users.length}</span>
-                    <span className="text-[10px] font-black text-[#38BDF8] uppercase">Users</span>
-                  </div>
-                  <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">
-                      {users.reduce((acc, u) => acc + u.sample_count, 0)}
-                    </span>
-                    <span className="text-[10px] font-black text-[#00aa44] uppercase">Templates</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setActiveTab('scan');
-                    handleScan('Palm Pay Auth');
-                  }}
-                  className="w-full py-3 bg-[#FFDE59] border-[2.5px] border-black rounded-2xl shadow-[3px_3px_0px_#121212] font-display font-black text-sm neo-btn hover:bg-[#ffe373]"
-                >
-                  Start Live Camera Scan
                 </button>
               </div>
 
@@ -498,7 +481,7 @@ export default function App() {
                     ➕
                   </div>
                   <h4 className="font-display font-black text-sm">Enroll Palm</h4>
-                  <p className="text-[10px] font-bold text-black mt-0.5">6 live camera captures</p>
+                  <p className="text-[10px] font-bold text-black mt-0.5">5s timer per sample</p>
                 </div>
 
                 <div 
@@ -509,7 +492,7 @@ export default function App() {
                     👥
                   </div>
                   <h4 className="font-display font-black text-sm">Enrolled Users</h4>
-                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} active in SQLite</p>
+                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} registered</p>
                 </div>
               </div>
             </div>
@@ -521,7 +504,6 @@ export default function App() {
           {activeTab === 'scan' && (
             <div className="space-y-4 animate-fadeIn">
               
-              {/* Action Mode Switcher */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-1.5 shadow-[3px_3px_0px_#121212] flex gap-1">
                 {[
                   { id: 'pay', name: 'Palm Pay Auth', desc: 'Payment Token', icon: '💳' },
@@ -545,46 +527,58 @@ export default function App() {
                 })}
               </div>
 
-              {/* Main Sensor Scanner Card with PALM ICON */}
+              {/* Radar Scanner Viewport */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center">
-                
                 <span className="absolute top-2.5 left-2.5 text-xs font-black text-black select-none">+</span>
                 <span className="absolute top-2.5 right-2.5 text-xs font-black text-black select-none">+</span>
 
-                {/* Radar Concentric Circles with PALM Silhouette */}
+                {/* Radar Concentric Circles with Countdown Overlay */}
                 <div className="relative w-44 h-44 flex items-center justify-center my-2">
-                  <div className={`absolute inset-0 rounded-full border-[3px] border-black ${isScanning ? 'bg-[#FF4081]/20 animate-ping' : 'bg-[#FFFDF0]'}`} />
-                  <div className={`w-36 h-36 rounded-full border-[3px] border-[#38BDF8] flex items-center justify-center ${isScanning ? 'animate-spin' : 'animate-pulse'}`}>
+                  <div className={`absolute inset-0 rounded-full border-[3px] border-black ${
+                    scanCountdown !== null || isScanning ? 'bg-[#FF4081]/20 animate-ping' : 'bg-[#FFFDF0]'
+                  }`} />
+                  <div className={`w-36 h-36 rounded-full border-[3px] border-[#38BDF8] flex items-center justify-center ${
+                    isScanning ? 'animate-spin' : 'animate-pulse'
+                  }`}>
                     <div className="w-24 h-24 rounded-full bg-[#FFDE59] border-[3px] border-black shadow-[3px_3px_0px_#121212] flex items-center justify-center">
-                      <PalmIcon className={`w-14 h-14 ${isScanning ? 'animate-bounce text-[#FF4081]' : 'text-black'}`} animated={isScanning} />
+                      {scanCountdown !== null ? (
+                        <span className="font-display font-black text-4xl animate-bounce">{scanCountdown}</span>
+                      ) : (
+                        <PalmIcon className={`w-14 h-14 ${isScanning ? 'animate-bounce text-[#FF4081]' : 'text-black'}`} animated={isScanning} />
+                      )}
                     </div>
                   </div>
                 </div>
 
                 <div className="mt-1 text-center">
                   <span className={`inline-block px-3.5 py-1 rounded-full text-xs font-black border-[2px] border-black shadow-[2px_2px_0px_#121212] ${
-                    isScanning ? 'bg-[#FF7A00] text-white' : cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
+                    scanCountdown !== null ? 'bg-[#FFDE59] text-black animate-pulse' : isScanning ? 'bg-[#FF7A00] text-white' : cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
                   }`}>
-                    {isScanning ? 'CAPTURING & MATCHING...' : cameraReady ? `READY: ${selectedAuthAction.name.toUpperCase()}` : 'CAMERA OFFLINE'}
+                    {scanCountdown !== null ? `STEADY PALM (${scanCountdown}s)...` : isScanning ? 'CAPTURING & MATCHING...' : cameraReady ? `READY: ${selectedAuthAction.name.toUpperCase()}` : 'CAMERA OFFLINE'}
                   </span>
                 </div>
               </div>
 
-              {/* Action Buttons */}
+              {/* Action Button */}
               <div className="space-y-2">
                 <button
-                  onClick={() => handleScan(selectedAuthAction.name)}
-                  disabled={isScanning || !cameraReady}
+                  onClick={() => handleScanWithCountdown(selectedAuthAction.name)}
+                  disabled={isScanning || scanCountdown !== null || !cameraReady}
                   className="w-full py-4 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[5px_5px_0px_#121212] font-display font-black text-lg flex items-center justify-center gap-3 neo-btn hover:bg-[#ffe26b] disabled:opacity-50"
                 >
-                  {isScanning ? (
+                  {scanCountdown !== null ? (
+                    <>
+                      <Timer className="w-6 h-6 animate-spin" />
+                      <span>HOLD STEADY: {scanCountdown}s...</span>
+                    </>
+                  ) : isScanning ? (
                     <>
                       <RefreshCw className="w-6 h-6 animate-spin" />
                       <span>READING CAMERA SENSOR...</span>
                     </>
                   ) : (
                     <>
-                      <span>CAPTURE &amp; AUTHORIZE PALM</span>
+                      <span>START 3s PALM SCAN</span>
                       <ArrowRight className="w-6 h-6 stroke-[3]" />
                     </>
                   )}
@@ -632,13 +626,13 @@ export default function App() {
           )}
 
           {/* ══════════════════════════════════════════════════════════
-              PAGE 3: 6-SAMPLE ENROLLMENT STUDIO
+              PAGE 3: 6-SAMPLE ENROLLMENT STUDIO WITH 5s COUNTDOWN
              ══════════════════════════════════════════════════════════ */}
           {activeTab === 'enroll' && (
             <div className="space-y-4 animate-fadeIn">
               <div>
                 <h2 className="font-display font-black text-xl tracking-tight">ENROLL PALM TEMPLATES</h2>
-                <p className="text-xs font-bold text-[#666]">6 multi-angle live camera captures (minimum 3 required)</p>
+                <p className="text-xs font-bold text-[#666]">Automatic 5-second timer per capture for hand adjustment</p>
               </div>
 
               {/* Username Input Card */}
@@ -658,7 +652,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 6 Step Indicators with Real Captured Thumbnails */}
+              {/* 6 Step Indicators */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-2.5">
                 <div className="flex justify-between items-center">
                   <span className="font-display font-black text-xs uppercase tracking-wider">LIVE SAMPLE PROGRESS</span>
@@ -691,21 +685,33 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Action Buttons */}
+              {/* 5-Second Timer Action Button */}
               <div className="space-y-2.5">
                 <button
-                  onClick={handleCaptureSample}
-                  disabled={isCapturingSample || enrollSamples.length >= 6 || !enrollUsername.trim() || !cameraReady}
-                  className="w-full py-3.5 bg-[#FF4081] text-white border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm flex items-center justify-center gap-2 neo-btn hover:bg-[#ff2872] disabled:opacity-50"
+                  onClick={handleCaptureSampleWithCountdown}
+                  disabled={isCapturingSample || enrollCountdown !== null || enrollSamples.length >= 6 || !enrollUsername.trim() || !cameraReady}
+                  className={`w-full py-4 border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2 neo-btn disabled:opacity-50 ${
+                    enrollCountdown !== null ? 'bg-[#FFDE59] text-black animate-pulse' : 'bg-[#FF4081] text-white hover:bg-[#ff2872]'
+                  }`}
                 >
-                  <Camera className="w-5 h-5" />
-                  <span>
-                    {isCapturingSample 
-                      ? 'CAPTURING FROM CAMERA...' 
-                      : enrollSamples.length >= 6 
-                      ? 'ALL 6 SAMPLES COLLECTED ✓' 
-                      : `CAPTURE SAMPLE [${enrollSamples.length + 1}/6]`}
-                  </span>
+                  {enrollCountdown !== null ? (
+                    <>
+                      <Timer className="w-6 h-6 animate-spin" />
+                      <span>POSITION HAND: CAPTURING IN {enrollCountdown}s...</span>
+                    </>
+                  ) : isCapturingSample ? (
+                    <>
+                      <RefreshCw className="w-6 h-6 animate-spin" />
+                      <span>PROCESSING VEINCODE...</span>
+                    </>
+                  ) : enrollSamples.length >= 6 ? (
+                    <span>ALL 6 SAMPLES COLLECTED ✓</span>
+                  ) : (
+                    <>
+                      <Camera className="w-5 h-5" />
+                      <span>START 5s TIMER FOR SAMPLE [{enrollSamples.length + 1}/6]</span>
+                    </>
+                  )}
                 </button>
 
                 <button
@@ -718,13 +724,18 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Guidance Banner */}
+              {/* Positioning Guidance Banner */}
               <div className={`border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] ${
-                enrollStatusMsg.includes('failed') || enrollStatusMsg.includes('not detected') ? 'bg-[#FF7A00] text-white' : 'bg-[#38BDF8] text-black'
+                enrollCountdown !== null ? 'bg-[#FFDE59] text-black' : enrollStatusMsg.includes('failed') || enrollStatusMsg.includes('not detected') ? 'bg-[#FF7A00] text-white' : 'bg-[#38BDF8] text-black'
               }`}>
-                <h4 className="font-display font-black text-xs uppercase mb-0.5">CAMERA GUIDANCE</h4>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Timer className="w-4 h-4" />
+                  <h4 className="font-display font-black text-xs uppercase">
+                    {enrollCountdown !== null ? `TIMED POSITIONING (${enrollCountdown}s)` : 'POSITIONING INSTRUCTION'}
+                  </h4>
+                </div>
                 <p className="text-xs font-bold leading-snug">
-                  {enrollStatusMsg || 'Hold palm flat ~10–15cm above sensor with fingers spread slightly. Minimum 3 samples required to save.'}
+                  {enrollStatusMsg || SAMPLE_GUIDANCE[enrollSamples.length] || 'Hold palm flat ~10–15cm above sensor. Tap the button to start the 5-second capture timer.'}
                 </p>
               </div>
             </div>
@@ -805,7 +816,6 @@ export default function App() {
                 <p className="text-xs font-bold text-[#666]">Hardware status &amp; biometric separation matrix</p>
               </div>
 
-              {/* Accuracy Report Trigger Card */}
               <div 
                 onClick={openReport}
                 className="bg-[#FFDE59] border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] cursor-pointer neo-btn flex items-center justify-between"
@@ -819,7 +829,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Hardware Stack Grid */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-2">
                 <h4 className="font-display font-black text-xs uppercase tracking-wider text-[#888]">COMPUTE SPECIFICATIONS</h4>
                 <div className="grid grid-cols-2 gap-2 text-xs font-black">
@@ -842,7 +851,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Database Storage Card */}
               <div className="bg-[#CCFF00] border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] flex justify-between items-center">
                 <div>
                   <h4 className="font-display font-black text-sm uppercase">SQLite Storage Vault</h4>

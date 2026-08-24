@@ -194,31 +194,51 @@ def _consistency_check(veincode_list: list) -> int:
     return len(bad)
 
 
-def _capture_one_sample(landmarker, username: str, idx: int):
+def _countdown(seconds=5, message="Get ready"):
+    """Visual countdown timer in terminal so user can position palm."""
+    print(f"  --> {message}")
+    for s in range(seconds, 0, -1):
+        print(f"      [{s}s] Steady palm over camera...", end="\r", flush=True)
+        time.sleep(1)
+    print("      [📸 CAPTURING NOW!]                          ", flush=True)
+
+
+def _capture_one_sample(landmarker, username: str, idx: int, guidance: str = ""):
     """
-    Capture one palm sample with one retry on failure.
+    Capture one palm sample with a 5-second countdown and one retry on failure.
     Returns (gray, clahe_roi, code, elapsed) on success, or None on double fail.
     """
+    sample_hints = [
+        "Position 1/6: Hold palm flat, centered ~10-15cm above sensor",
+        "Position 2/6: Tilt palm slightly to the LEFT (~5 degrees)",
+        "Position 3/6: Tilt palm slightly to the RIGHT (~5 degrees)",
+        "Position 4/6: Raise palm slightly HIGHER (~15-18cm)",
+        "Position 5/6: Spread fingers slightly wider",
+        "Position 6/6: Hold palm flat, centered for final confirmation",
+    ]
+    hint = guidance or sample_hints[min(idx, len(sample_hints) - 1)]
+
     for attempt in range(2):
         if attempt == 1:
-            print("    Retrying — press ENTER when ready.")
-            input()
+            print("    [!] Landmark detection failed. Retrying...")
+        
+        _countdown(5, hint)
         t0   = time.time()
         gray = _capture_gray()
         try:
             clahe_roi, code = process_frame(gray, landmarker)
             return gray, clahe_roi, code, time.time() - t0
         except ValueError as e:
-            print(f"    Failed: {e}")
+            print(f"    [!] Failed: {e}")
             if attempt == 0:
-                print("    Try again — press ENTER to retry.")
+                print("    Press ENTER to start 5-second countdown retry...")
                 input()
-    print("    Sample failed twice — skipping.")
+    print("    [!] Sample failed twice — skipping.")
     return None
 
 
 def opt_enroll(landmarker, engine):
-    """Enroll a new user with up to 6 palm samples."""
+    """Enroll a new user with up to 6 palm samples with 5-second timers."""
     if not CAMERA_AVAILABLE:
         _no_camera()
         return
@@ -233,13 +253,15 @@ def opt_enroll(landmarker, engine):
         print(f"  '{username}' is already enrolled. Delete first to re-enroll.")
         return
 
-    print(f"\n  Enrolling '{username}' — 6 palm samples required.")
-    print("  Press ENTER before each capture.\n")
+    print(f"\n  ========================================================")
+    print(f"   Enrolling '{username}' — 6 Multi-Angle Palm Samples")
+    print(f"   Each sample has a 5-second timer to position your hand.")
+    print(f"  ========================================================\n")
 
     veincode_list = []
 
     for i in range(6):
-        input(f"  Sample [{i+1}/6] — hold palm steady, press ENTER to capture")
+        input(f"  Sample [{i+1}/6] — Press ENTER when ready to begin 5s countdown...")
         result = _capture_one_sample(landmarker, username, i)
         if result is None:
             continue
@@ -247,7 +269,7 @@ def opt_enroll(landmarker, engine):
         _save_capture(gray,     username, "enroll", idx=i)
         _save_roi(clahe_roi,    username, "enroll", idx=i)
         veincode_list.append(code)
-        print(f"    OK  VR={code['VR'].mean():.3f}  ({elapsed:.2f}s)")
+        print(f"    ✓ OK Sample [{i+1}/6] captured! (VR={code['VR'].mean():.3f} in {elapsed:.2f}s)\n")
 
     if len(veincode_list) < 3:
         print(f"\n  Too few valid samples ({len(veincode_list)}/3 minimum). Cancelled.")
@@ -258,7 +280,7 @@ def opt_enroll(landmarker, engine):
 
     enroll_user(username, veincode_list)
     engine.refresh_cache()
-    print(f"\n  ENROLLED: '{username}' with {len(veincode_list)} samples.\n")
+    print(f"\n  [+] ENROLLED: '{username}' with {len(veincode_list)} samples stored in database.\n")
 
 
 # ---------------------------------------------------------------------------
@@ -266,12 +288,13 @@ def opt_enroll(landmarker, engine):
 # ---------------------------------------------------------------------------
 
 def opt_scan(landmarker, engine):
-    """Capture one palm and identify the user."""
+    """Capture one palm with a 3-second timer and identify the user."""
     if not CAMERA_AVAILABLE:
         _no_camera()
         return
 
-    input("  Place palm in front of camera — press ENTER to scan")
+    input("  Press ENTER to start 3-second scan countdown...")
+    _countdown(3, "Hold palm steady over sensor")
 
     t0   = time.time()
     gray = _capture_gray()
@@ -279,7 +302,7 @@ def opt_scan(landmarker, engine):
     try:
         clahe_roi, probe_code = process_frame(gray, landmarker)
     except ValueError as e:
-        print(f"  Scan failed: {e}")
+        print(f"  [!] Scan failed: {e}")
         return
 
     username, score = engine.identify(probe_code)
