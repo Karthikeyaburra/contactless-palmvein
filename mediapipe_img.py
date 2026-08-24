@@ -52,6 +52,26 @@ from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions,
 DEFAULT_MODEL_PATH = "hand_landmarker.task"
 
 
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+
+def ensure_model_exists(model_path=DEFAULT_MODEL_PATH):
+    """Checks if the MediaPipe model exists, downloading it automatically if missing."""
+    if not os.path.exists(model_path):
+        print(f"[*] MediaPipe model '{model_path}' not found. Downloading (~8MB)...")
+        import urllib.request
+        os.makedirs(os.path.dirname(os.path.abspath(model_path)), exist_ok=True)
+        try:
+            urllib.request.urlretrieve(MODEL_URL, model_path)
+            print("[+] MediaPipe model download complete!")
+        except Exception as e:
+            raise FileNotFoundError(
+                f"Failed to auto-download MediaPipe model: {e}\n"
+                f"Please run manually:\n"
+                f"  curl -L -o {model_path} {MODEL_URL}"
+            )
+    return model_path
+
+
 # ---------- Stage 0: Landmarker factory (call ONCE at startup) ----------
 
 def build_landmarker(model_path=DEFAULT_MODEL_PATH):
@@ -59,13 +79,7 @@ def build_landmarker(model_path=DEFAULT_MODEL_PATH):
     Creates and returns a persistent HandLandmarker instance.
     Call this ONCE at application startup.
     """
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(
-            f"MediaPipe model not found: '{model_path}'\n"
-            f"Download: curl -L -o {model_path} "
-            f"https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-            f"hand_landmarker/float16/1/hand_landmarker.task"
-        )
+    ensure_model_exists(model_path)
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=RunningMode.IMAGE,
@@ -82,14 +96,17 @@ def detect_hand_landmarks(gray_img, landmarker):
     Runs MediaPipe HandLandmarker on the image and returns all 21 (x, y)
     pixel coordinates for the first detected hand.
 
-    landmarker: an already-created HandLandmarker instance.
-    Do NOT create or destroy the landmarker inside this function.
+    landmarker: an already-created HandLandmarker instance or model_path string.
     """
     if gray_img.shape[0] < 200 or gray_img.shape[1] < 200:
         raise ValueError(
             f"Image too small for landmark detection: {gray_img.shape}. "
             f"Minimum 200x200 required."
         )
+
+    # Support passing model_path string or HandLandmarker object
+    if isinstance(landmarker, str):
+        landmarker = build_landmarker(landmarker)
 
     rgb = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
