@@ -26,7 +26,7 @@ from mediapipe_img import (
 from gabor import extract_veincode, match_templates, MATCH_THRESHOLD
 from db_manager import (
     init_db, enroll_user, delete_user, list_users,
-    user_exists, log_access, count_users,
+    user_exists, log_access,
 )
 from search_engine import SearchEngine
 
