@@ -3,8 +3,7 @@ r"""
 server.py
 ---------
 FastAPI + Uvicorn backend serving the Palm Vein Biometrics API & Neobrutalism Web UI.
-Run with:
-  .\.venv\Scripts\python.exe server.py
+Directly connects to Raspberry Pi NoIR Camera (Picamera2) or USB Webcam (OpenCV).
 """
 
 import os
@@ -55,21 +54,24 @@ os.makedirs(ROI_DIR, exist_ok=True)
 engine = None
 landmarker = None
 picam2 = None
+cv_cap = None
 CAMERA_AVAILABLE = False
+CAMERA_TYPE = None
 preview_cfg = None
 still_cfg = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine, landmarker, picam2, CAMERA_AVAILABLE, preview_cfg, still_cfg
+    global engine, landmarker, picam2, cv_cap, CAMERA_AVAILABLE, CAMERA_TYPE, preview_cfg, still_cfg
     init_db()
     engine = SearchEngine(n_workers=4)
 
     try:
         landmarker = build_landmarker(DEFAULT_MODEL_PATH)
     except Exception as e:
-        print(f"Landmarker warning: {e}")
+        print(f"[!] Landmarker warning: {e}")
 
+    # 1. Try Raspberry Pi NoIR Camera (Picamera2)
     try:
         from picamera2 import Picamera2
         picam2 = Picamera2()
@@ -79,16 +81,38 @@ async def lifespan(app: FastAPI):
         picam2.start()
         picam2.set_controls({"AeEnable": False, "ExposureTime": 5000, "AnalogueGain": 1.0})
         CAMERA_AVAILABLE = True
+        CAMERA_TYPE = "picamera2"
+        print("[+] Picamera2 initialized successfully (Raspberry Pi NoIR Camera).")
     except Exception:
         picam2 = None
-        CAMERA_AVAILABLE = False
+
+    # 2. Fallback to USB Webcam / V4L2 Camera (OpenCV)
+    if not CAMERA_AVAILABLE:
+        try:
+            cap = cv2.VideoCapture(0)
+            if cap.isOpened():
+                ret, _ = cap.read()
+                if ret:
+                    cv_cap = cap
+                    CAMERA_AVAILABLE = True
+                    CAMERA_TYPE = "opencv"
+                    print("[+] OpenCV VideoCapture(0) initialized successfully.")
+                else:
+                    cap.release()
+        except Exception as e:
+            print(f"[!] OpenCV Camera error: {e}")
+
+    if not CAMERA_AVAILABLE:
+        print("[!] No live camera detected. Connect a Pi NoIR camera or USB webcam.")
 
     yield
 
     if engine:
         engine.shutdown()
-    if CAMERA_AVAILABLE and picam2 is not None:
+    if CAMERA_TYPE == "picamera2" and picam2 is not None:
         picam2.stop()
+    if CAMERA_TYPE == "opencv" and cv_cap is not None:
+        cv_cap.release()
 
 # App & Middleware
 app = FastAPI(title="Palm Vein Biometrics API", lifespan=lifespan)
@@ -107,41 +131,64 @@ enrollment_cache = {}
 
 # Helpers
 def capture_frame_gray() -> np.ndarray:
-    if CAMERA_AVAILABLE and picam2 is not None:
+    """Capture a single live grayscale frame from camera."""
+    if CAMERA_TYPE == "picamera2" and picam2 is not None:
         picam2.switch_mode(still_cfg)
         frame = picam2.capture_array()
         picam2.switch_mode(preview_cfg)
         return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     
-    # Fallback to local captures for desktop testing
-    sample_candidates = [
-        os.path.join(CAPTURE_DIR, "myright", "capture_000.png"),
-        os.path.join(CAPTURE_DIR, "myleft", "capture_005.png"),
-        "1100_2.bmp"
-    ]
-    for p in sample_candidates:
-        if os.path.exists(p):
-            img = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
-            if img is not None:
-                return img
-    # Synthetic frame
-    synth = np.full((480, 640), 120, dtype=np.uint8)
-    cv2.circle(synth, (320, 240), 100, 200, -1)
-    return synth
+    if CAMERA_TYPE == "opencv" and cv_cap is not None:
+        # Flush any stale buffer frames
+        for _ in range(2):
+            cv_cap.grab()
+        ret, frame = cv_cap.read()
+        if not ret or frame is None:
+            raise ValueError("Failed to capture frame from webcam.")
+        if len(frame.shape) == 3:
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return frame
+
+    raise ValueError("No live camera available. Please connect Raspberry Pi camera or webcam.")
 
 
 def process_image(gray: np.ndarray):
+    """
+    Extract CLAHE ROI and Gabor VeinCode from a grayscale hand frame.
+    Raises ValueError if palm landmarks or valleys cannot be detected.
+    """
     stretched = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
     landmarks = detect_hand_landmarks(stretched, landmarker)
+    if landmarks is None or len(landmarks) < 21:
+        raise ValueError("No hand landmarks detected. Hold palm flat ~10-15cm above camera.")
+
     pv1, pv2 = extract_valleys_from_landmarks(landmarks)
+    if pv1 is None or pv2 is None:
+        raise ValueError("Cannot detect finger valley landmarks. Spread fingers slightly.")
+
     hand_mask = segment_hand(stretched)
     roi_256, _, _ = extract_ma2017_scaled_roi(
         stretched, pv1, pv2, hand_mask,
         target_size=256, scale_factor=1.5, offset_factor=0.35
     )
+    if roi_256 is None or roi_256.size == 0:
+        raise ValueError("Failed to extract palm ROI bounding box.")
+
     clahe_roi = enhance_roi_vessels(roi_256)
     code = extract_veincode(clahe_roi)
     return clahe_roi, code
+
+
+def save_capture_to_disk(gray: np.ndarray, roi: np.ndarray, username: str, mode: str, idx: int = 0):
+    """Save raw capture and CLAHE ROI to captures/ and roi_clahe/."""
+    try:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        cap_name = f"{username}_{mode}_{idx}_{ts}.png" if mode == "enroll" else f"{username}_{mode}_{ts}.png"
+        roi_name = f"{username}_{mode}_{idx}_{ts}_clahe.png" if mode == "enroll" else f"{username}_{mode}_{ts}_clahe.png"
+        cv2.imwrite(os.path.join(CAPTURE_DIR, cap_name), gray)
+        cv2.imwrite(os.path.join(ROI_DIR, roi_name), roi)
+    except Exception as e:
+        print(f"[!] Warning: Failed saving capture to disk: {e}")
 
 
 # Request Models
@@ -161,6 +208,7 @@ def get_status():
     return {
         "status": "online",
         "camera_available": CAMERA_AVAILABLE,
+        "camera_type": CAMERA_TYPE or "None",
         "users_count": len(users),
         "total_templates": sum(u["sample_count"] for u in users),
         "match_threshold": MATCH_THRESHOLD,
@@ -184,17 +232,26 @@ def remove_user(username: str):
 @app.post("/api/scan")
 def scan_palm():
     t0 = time.time()
-    gray = capture_frame_gray()
+    try:
+        gray = capture_frame_gray()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     try:
         clahe_roi, probe_code = process_image(gray)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Pipeline extraction failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Pipeline error: {e}")
 
     username, score = engine.identify(probe_code)
     elapsed = int((time.time() - t0) * 1000)
     accepted = (username is not None)
 
     log_access(user_id=None, score=score, accepted=accepted)
+
+    # Save to disk
+    save_capture_to_disk(gray, clahe_roi, username or "unknown", "scan")
 
     # Encode CLAHE ROI as base64 thumbnail
     _, buf = cv2.imencode(".png", clahe_roi)
@@ -216,21 +273,31 @@ def enroll_sample(req: SampleReq):
     if not uname:
         raise HTTPException(status_code=400, detail="Username required")
 
-    gray = capture_frame_gray()
+    try:
+        gray = capture_frame_gray()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     try:
         clahe_roi, code = process_image(gray)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Sample extraction failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Extraction error: {e}")
 
     # Add to in-memory session cache
     enrollment_cache.setdefault(uname, []).append(code)
+    sample_idx = len(enrollment_cache[uname])
+
+    # Save capture and ROI to disk
+    save_capture_to_disk(gray, clahe_roi, uname, "enroll", idx=sample_idx)
 
     _, buf = cv2.imencode(".png", clahe_roi)
     b64_roi = base64.b64encode(buf).decode("utf-8")
 
     return {
         "success": True,
-        "sample_count": len(enrollment_cache[uname]),
+        "sample_count": sample_idx,
         "vr_mean": float(code["VR"].mean()),
         "thumb": b64_roi,
     }

@@ -27,7 +27,8 @@ import {
   Award, 
   Layers, 
   Smartphone, 
-  Coins 
+  Coins,
+  AlertTriangle
 } from 'lucide-react';
 
 interface User {
@@ -89,11 +90,12 @@ function PalmIcon({ className = "w-12 h-12 text-black", animated = false }: { cl
 export default function App() {
   // Navigation: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'
   const [activeTab, setActiveTab] = useState<'landing' | 'scan' | 'enroll' | 'users' | 'admin'>('landing');
-  const [cameraReady, setCameraReady] = useState(true);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraType, setCameraType] = useState('Checking...');
   const [users, setUsers] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Authorization mode in Scan tab (NO PRICING - Pure Biometric Actions)
+  // Authorization mode in Scan tab
   const [selectedAuthAction, setSelectedAuthAction] = useState<{ id: string; name: string; desc: string; icon: string }>({
     id: 'pay',
     name: 'Palm Pay Auth',
@@ -120,10 +122,10 @@ export default function App() {
 
   const showToast = (msg: string, type: 'success' | 'warn' | 'error' = 'success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2600);
+    setTimeout(() => setToast(null), 3500);
   };
 
-  // Load Data
+  // Load Data from Backend
   const loadUsers = async () => {
     try {
       const res = await fetch('/api/users');
@@ -132,7 +134,7 @@ export default function App() {
         setUsers(data.users || []);
       }
     } catch (e) {
-      console.warn('Backend running in offline mock mode:', e);
+      console.warn('Backend offline:', e);
     }
   };
 
@@ -141,19 +143,23 @@ export default function App() {
       const res = await fetch('/api/status');
       if (res.ok) {
         const data = await res.json();
-        setCameraReady(data.camera_available ?? true);
+        setCameraReady(data.camera_available ?? false);
+        setCameraType(data.camera_type || 'None');
       }
     } catch (e) {
-      // offline fallback
+      setCameraReady(false);
+      setCameraType('Disconnected');
     }
   };
 
   useEffect(() => {
     loadUsers();
     loadStatus();
+    const interval = setInterval(loadStatus, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Trigger Scan
+  // Trigger Real Scan
   const handleScan = async (actionType = 'Palm Pay Auth') => {
     if (isScanning) return;
     setIsScanning(true);
@@ -178,107 +184,101 @@ export default function App() {
           });
         }
       } else {
-        const mockResult: ScanResult = {
-          accepted: true,
-          username: users[0]?.username || 'yesh-right',
-          score: 0.1153,
-          threshold: 0.3800,
-          time_ms: 280,
-          action_type: actionType,
-        };
-        setLastScan(mockResult);
-        setResultOverlay(mockResult);
-        confetti({
-          particleCount: 70,
-          spread: 60,
-          origin: { y: 0.6 },
-          colors: ['#FFDE59', '#38BDF8', '#FF4081', '#CCFF00']
-        });
+        const err = await res.json();
+        showToast(err.detail || 'Scan failed: Palm not detected', 'warn');
       }
     } catch {
-      const mockResult: ScanResult = {
-        accepted: true,
-        username: users[0]?.username || 'yesh-right',
-        score: 0.1153,
-        threshold: 0.3800,
-        time_ms: 280,
-        action_type: actionType,
-      };
-      setLastScan(mockResult);
-      setResultOverlay(mockResult);
+      showToast('Cannot connect to server. Ensure server.py is running on Pi.', 'error');
     } finally {
       setIsScanning(false);
     }
   };
 
-  // Sample Capture
+  // Live Camera Sample Capture
   const handleCaptureSample = async () => {
     if (isCapturingSample || enrollSamples.length >= 6) return;
-    if (!enrollUsername.trim()) {
-      showToast('Enter a user ID or name first!', 'warn');
+    const cleanUname = enrollUsername.trim().toLowerCase();
+    if (!cleanUname) {
+      showToast('Enter a username or ID first!', 'warn');
       return;
     }
     setIsCapturingSample(true);
+    setEnrollStatusMsg('Capturing frame from camera & computing Gabor VeinCode...');
 
     try {
       const res = await fetch('/api/enroll/sample', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: enrollUsername, sample_idx: enrollSamples.length }),
+        body: JSON.stringify({ username: cleanUname, sample_idx: enrollSamples.length }),
       });
       if (res.ok) {
         const data = await res.json();
-        setEnrollSamples(prev => [...prev, { vr_mean: data.vr_mean || 0.518, thumb: data.thumb || '' }]);
-        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured! Quality: Excellent`);
-        showToast(`Sample ${enrollSamples.length + 1}/6 captured!`, 'success');
+        setEnrollSamples(prev => [...prev, { vr_mean: data.vr_mean || 0.5, thumb: data.thumb || '' }]);
+        setEnrollStatusMsg(`Sample #${enrollSamples.length + 1} captured! Place hand at slightly different angle for next.`);
+        showToast(`Sample ${enrollSamples.length + 1}/6 captured from camera!`, 'success');
       } else {
-        setEnrollSamples(prev => [...prev, { vr_mean: 0.518, thumb: '' }]);
-        showToast(`Sample ${enrollSamples.length + 1}/6 captured!`, 'success');
+        const err = await res.json();
+        const msg = err.detail || 'Hand not detected. Hold palm flat ~10-15cm above sensor.';
+        setEnrollStatusMsg(`Capture failed: ${msg}`);
+        showToast(msg, 'warn');
       }
     } catch {
-      setEnrollSamples(prev => [...prev, { vr_mean: 0.518, thumb: '' }]);
-      showToast(`Sample ${enrollSamples.length + 1}/6 captured!`, 'success');
+      showToast('Server connection failed.', 'error');
+      setEnrollStatusMsg('Error communicating with backend server.');
     } finally {
       setIsCapturingSample(false);
     }
   };
 
-  // Save Enrollment
+  // Save Enrollment to Database
   const handleSaveEnrollment = async () => {
-    if (enrollSamples.length < 3 || !enrollUsername.trim()) return;
+    const cleanUname = enrollUsername.trim().toLowerCase();
+    if (enrollSamples.length < 3 || !cleanUname) {
+      showToast('Capture at least 3 samples before saving!', 'warn');
+      return;
+    }
     try {
-      await fetch('/api/enroll/save', {
+      const res = await fetch('/api/enroll/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: enrollUsername }),
+        body: JSON.stringify({ username: cleanUname }),
       });
+      if (res.ok) {
+        showToast(`ENROLLED '${cleanUname}' with ${enrollSamples.length} templates!`, 'success');
+        confetti({
+          particleCount: 100,
+          spread: 80,
+          origin: { y: 0.5 },
+          colors: ['#FFDE59', '#38BDF8', '#FF4081', '#CCFF00']
+        });
+        setEnrollUsername('');
+        setEnrollSamples([]);
+        setEnrollStatusMsg('');
+        loadUsers();
+        setActiveTab('users');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to save enrollment to database.', 'error');
+      }
     } catch {
-      // Offline fallback
+      showToast('Network error saving to database.', 'error');
     }
-    showToast(`ENROLLED '${enrollUsername}' with ${enrollSamples.length} samples!`, 'success');
-    confetti({
-      particleCount: 100,
-      spread: 80,
-      origin: { y: 0.5 },
-      colors: ['#FFDE59', '#38BDF8', '#FF4081', '#CCFF00']
-    });
-    setEnrollUsername('');
-    setEnrollSamples([]);
-    setEnrollStatusMsg('');
-    loadUsers();
-    setActiveTab('users');
   };
 
   // Delete User
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     try {
-      await fetch(`/api/users/${deleteTarget}`, { method: 'DELETE' });
+      const res = await fetch(`/api/users/${deleteTarget}`, { method: 'DELETE' });
+      if (res.ok) {
+        setUsers(prev => prev.filter(u => u.username !== deleteTarget));
+        showToast(`User '${deleteTarget}' removed from database!`, 'success');
+      } else {
+        showToast('Failed to delete user.', 'error');
+      }
     } catch {
-      // offline fallback
+      showToast('Error connecting to backend.', 'error');
     }
-    setUsers(prev => prev.filter(u => u.username !== deleteTarget));
-    showToast(`User '${deleteTarget}' deleted!`, 'error');
     setDeleteTarget(null);
   };
 
@@ -292,10 +292,7 @@ export default function App() {
         setReportData(data);
       }
     } catch {
-      setReportData({
-        self_matches: [['yesh-right', 0.11, 0.22, 0.33, 'GOOD']],
-        cross_matches: [['yesh-right vs yesh-left', 0.5026, 'OK']],
-      });
+      setReportData(null);
     }
   };
 
@@ -303,7 +300,7 @@ export default function App() {
     u.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Tabs index for sliding indicator
+  // Tabs list for sliding navbar
   const tabList: Array<{ id: 'landing' | 'scan' | 'enroll' | 'users' | 'admin'; label: string; icon: any }> = [
     { id: 'landing', label: 'Home', icon: Compass },
     { id: 'scan', label: 'Scan', icon: Scan },
@@ -320,23 +317,26 @@ export default function App() {
       {/* ── PHONE CONTAINER (480px Portrait Neobrutalism Frame) ── */}
       <div className="w-full max-w-[480px] min-h-screen sm:min-h-[854px] sm:h-[854px] bg-[#FFFDF0] border-x-0 sm:border-[4px] border-black sm:rounded-[36px] sm:shadow-[10px_10px_0px_#121212] flex flex-col relative overflow-hidden bg-neo-cream">
 
-        {/* ── TOP STATUS / SERVICE BAR (from Dribbble mockup) ── */}
+        {/* ── TOP STATUS / SERVICE BAR ── */}
         <div className="px-6 pt-3 pb-1 flex items-center justify-between text-xs font-black text-black z-20">
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-black"></span>
             <span className="w-2 h-2 rounded-full bg-black"></span>
-            <span className="text-[11px]">Service</span>
+            <span className="text-[11px] uppercase">{cameraType}</span>
           </div>
           <span className="font-display text-sm font-black">19:02</span>
           <div className="flex items-center gap-1.5">
-            <div className={`w-3 h-3 rounded-full border-[1.5px] border-black ${cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF7A00]'}`} />
+            <div 
+              title={cameraReady ? `Camera Active: ${cameraType}` : 'No Camera Detected'} 
+              className={`w-3 h-3 rounded-full border-[1.5px] border-black ${cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF4081]'}`} 
+            />
             <div className="w-5 h-2.5 border-[1.5px] border-black rounded-sm p-[1px]">
               <div className="w-full h-full bg-black rounded-[0.5px]"></div>
             </div>
           </div>
         </div>
 
-        {/* ── TOP PROFILE / HEADER (from Dribbble mockup) ── */}
+        {/* ── TOP PROFILE / HEADER ── */}
         <header className="px-5 py-2.5 flex items-center justify-between z-20 border-b-[3px] border-black bg-[#FFFDF0]">
           <div 
             onClick={() => setActiveTab('landing')} 
@@ -347,14 +347,14 @@ export default function App() {
             </div>
             <div>
               <h1 className="font-display font-black text-base leading-none">Sam Smith</h1>
-              <p className="text-[10px] font-bold text-[#666] mt-0.5">Always a winner!</p>
+              <p className="text-[10px] font-bold text-[#666] mt-0.5">Palm Vein Biometrics</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <div className="px-2.5 py-1 bg-[#38BDF8] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] text-xs font-black flex items-center gap-1">
               <Star className="w-3.5 h-3.5 fill-[#FFDE59] text-black" />
-              <span>15 Stars</span>
+              <span>{users.length} Users</span>
             </div>
 
             <button 
@@ -373,7 +373,7 @@ export default function App() {
             <div className={`p-3 border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-xs text-center flex items-center justify-center gap-2 ${
               toast.type === 'error' ? 'bg-[#FF4081] text-white' : toast.type === 'warn' ? 'bg-[#FF7A00] text-white' : 'bg-[#CCFF00] text-black'
             }`}>
-              <CheckCircle2 className="w-4 h-4" />
+              {toast.type === 'error' || toast.type === 'warn' ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
               <span>{toast.msg}</span>
             </div>
           </div>
@@ -388,10 +388,17 @@ export default function App() {
           {activeTab === 'landing' && (
             <div className="space-y-4 animate-fadeIn">
               
+              {/* Camera Connection Warning if camera is missing */}
+              {!cameraReady && (
+                <div className="bg-[#FF7A00] text-white border-[3px] border-black rounded-2xl p-3 shadow-[3px_3px_0px_#121212] flex items-center gap-2.5 text-xs font-black">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <span>Camera not detected. Connect Raspberry Pi NoIR Camera or USB Webcam.</span>
+                </div>
+              )}
+
               {/* Dynamic Animated Fintech Hero Card */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center text-center">
                 
-                {/* Floating Geometric Elements & Badges */}
                 <div className="absolute top-2 left-3 w-8 h-8 border-[2px] border-black bg-[#FFDE59] rounded-md grid grid-cols-2 grid-rows-2">
                   <div className="border-r border-b border-black"></div>
                   <div className="border-b border-black"></div>
@@ -399,29 +406,25 @@ export default function App() {
                 </div>
 
                 <div className="absolute top-3 right-3 px-2 py-0.5 bg-[#38BDF8] border-[2px] border-black rounded-lg text-[10px] font-black shadow-[2px_2px_0px_#121212] animate-float">
-                  💳 TAP & PAY
+                  💳 LIVE BIOMETRICS
                 </div>
 
-                {/* Illustrated Payment Scene: Phone, Hand Wave, and Floating Coins */}
+                {/* Smartphone Terminal Card */}
                 <div className="relative my-3 w-full flex items-center justify-center">
-                  
-                  {/* Floating Gold Coin */}
                   <div className="absolute -left-1 top-2 w-9 h-9 rounded-full bg-[#FFDE59] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm animate-bounce">
                     🪙
                   </div>
 
-                  {/* Smartphone Terminal Card */}
                   <div className="relative w-28 h-36 bg-[#FFFDF0] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] flex flex-col items-center justify-between p-2 overflow-hidden">
                     <div className="w-8 h-1 bg-black rounded-full mb-1"></div>
                     <div className="w-16 h-16 rounded-full bg-[#CCFF00] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center animate-pulse">
                       <PalmIcon className="w-10 h-10 text-black" animated={true} />
                     </div>
                     <div className="w-full py-1 bg-[#38BDF8] border-[1.5px] border-black rounded-md text-[9px] font-black text-center uppercase tracking-tighter">
-                      VEINPAY POS
+                      PALM VEIN POS
                     </div>
                   </div>
 
-                  {/* Floating Transfer Token Pill */}
                   <div className="absolute -right-1 bottom-4 px-2.5 py-1 rounded-xl bg-[#FF4081] text-white border-[2px] border-black shadow-[2px_2px_0px_#121212] text-[10px] font-black flex items-center gap-1 animate-wiggle">
                     <Zap className="w-3 h-3 fill-white" />
                     <span>0.28s Instant</span>
@@ -431,9 +434,9 @@ export default function App() {
                 {/* Dribbble Typography Headline */}
                 <div className="space-y-1 my-2">
                   <h2 className="font-display font-black text-xl leading-tight">
-                    Sepideh <span className="text-[#FF4081]">just authorized</span> her payment for today!
+                    Sub-dermal infrared <span className="text-[#FF4081]">palm authentication</span>
                   </h2>
-                  <p className="text-xs font-bold text-[#666]">Zero cards, zero phones. Complete contactless palm security.</p>
+                  <p className="text-xs font-bold text-[#666]">Real hardware capture using Gabor wavelets &amp; MNHD matching.</p>
                 </div>
 
                 {/* Primary CTA Button */}
@@ -441,34 +444,36 @@ export default function App() {
                   onClick={() => setActiveTab('scan')}
                   className="mt-2 w-full py-3.5 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe373]"
                 >
-                  <span>See what she did</span>
+                  <span>Open Palm Scanner</span>
                   <ArrowRight className="w-5 h-5 stroke-[3]" />
                 </button>
               </div>
 
-              {/* Countdown / Challenge Metric Card (from Dribbble mockup) */}
+              {/* Status / Metric Card */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-4 shadow-[5px_5px_0px_#121212] space-y-3">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="font-display font-black text-sm">Design challenge 5</h3>
-                    <p className="text-[11px] font-bold text-[#666]">Palm vein biometric terminal v2.0</p>
+                    <h3 className="font-display font-black text-sm">Biometric Engine Status</h3>
+                    <p className="text-[11px] font-bold text-[#666]">4-Core Parallel MNHD</p>
                   </div>
-                  <div className="flex text-xs">⭐⭐⭐⭐☆</div>
+                  <div className="flex text-xs">⭐⭐⭐⭐⭐</div>
                 </div>
 
-                {/* 3 Metric Blocks (Days : Hours : Minutes style) */}
+                {/* 3 Metric Blocks */}
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">1</span>
-                    <span className="text-[10px] font-black text-[#FF4081] uppercase">Days</span>
+                    <span className="font-display font-black text-2xl block leading-none">0.38</span>
+                    <span className="text-[10px] font-black text-[#FF4081] uppercase">Threshold</span>
                   </div>
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">15</span>
-                    <span className="text-[10px] font-black text-[#38BDF8] uppercase">Hours</span>
+                    <span className="font-display font-black text-2xl block leading-none">{users.length}</span>
+                    <span className="text-[10px] font-black text-[#38BDF8] uppercase">Users</span>
                   </div>
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">32</span>
-                    <span className="text-[10px] font-black text-[#00aa44] uppercase">Minutes</span>
+                    <span className="font-display font-black text-2xl block leading-none">
+                      {users.reduce((acc, u) => acc + u.sample_count, 0)}
+                    </span>
+                    <span className="text-[10px] font-black text-[#00aa44] uppercase">Templates</span>
                   </div>
                 </div>
 
@@ -479,7 +484,7 @@ export default function App() {
                   }}
                   className="w-full py-3 bg-[#FFDE59] border-[2.5px] border-black rounded-2xl shadow-[3px_3px_0px_#121212] font-display font-black text-sm neo-btn hover:bg-[#ffe373]"
                 >
-                  I'm Done! Start Scanning
+                  Start Live Camera Scan
                 </button>
               </div>
 
@@ -493,7 +498,7 @@ export default function App() {
                     ➕
                   </div>
                   <h4 className="font-display font-black text-sm">Enroll Palm</h4>
-                  <p className="text-[10px] font-bold text-black mt-0.5">Register new 6-sample user</p>
+                  <p className="text-[10px] font-bold text-black mt-0.5">6 live camera captures</p>
                 </div>
 
                 <div 
@@ -503,8 +508,8 @@ export default function App() {
                   <div className="w-8 h-8 rounded-full bg-white border-[2px] border-black flex items-center justify-center font-black text-sm mb-2">
                     👥
                   </div>
-                  <h4 className="font-display font-black text-sm">Friends Directory</h4>
-                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} enrolled profiles</p>
+                  <h4 className="font-display font-black text-sm">Enrolled Users</h4>
+                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} active in SQLite</p>
                 </div>
               </div>
             </div>
@@ -516,7 +521,7 @@ export default function App() {
           {activeTab === 'scan' && (
             <div className="space-y-4 animate-fadeIn">
               
-              {/* Action Mode Switcher (NO PRICING - Pure Authentication Actions) */}
+              {/* Action Mode Switcher */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-1.5 shadow-[3px_3px_0px_#121212] flex gap-1">
                 {[
                   { id: 'pay', name: 'Palm Pay Auth', desc: 'Payment Token', icon: '💳' },
@@ -543,7 +548,6 @@ export default function App() {
               {/* Main Sensor Scanner Card with PALM ICON */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center">
                 
-                {/* Decorative Crosses */}
                 <span className="absolute top-2.5 left-2.5 text-xs font-black text-black select-none">+</span>
                 <span className="absolute top-2.5 right-2.5 text-xs font-black text-black select-none">+</span>
 
@@ -559,28 +563,28 @@ export default function App() {
 
                 <div className="mt-1 text-center">
                   <span className={`inline-block px-3.5 py-1 rounded-full text-xs font-black border-[2px] border-black shadow-[2px_2px_0px_#121212] ${
-                    isScanning ? 'bg-[#FF7A00] text-white' : 'bg-[#CCFF00]'
+                    isScanning ? 'bg-[#FF7A00] text-white' : cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
                   }`}>
-                    {isScanning ? 'MATCHING GABOR VEINCODE...' : `READY: ${selectedAuthAction.name.toUpperCase()}`}
+                    {isScanning ? 'CAPTURING & MATCHING...' : cameraReady ? `READY: ${selectedAuthAction.name.toUpperCase()}` : 'CAMERA OFFLINE'}
                   </span>
                 </div>
               </div>
 
-              {/* Action Buttons (Neobrutalism Hover Effect) */}
+              {/* Action Buttons */}
               <div className="space-y-2">
                 <button
                   onClick={() => handleScan(selectedAuthAction.name)}
-                  disabled={isScanning}
+                  disabled={isScanning || !cameraReady}
                   className="w-full py-4 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[5px_5px_0px_#121212] font-display font-black text-lg flex items-center justify-center gap-3 neo-btn hover:bg-[#ffe26b] disabled:opacity-50"
                 >
                   {isScanning ? (
                     <>
                       <RefreshCw className="w-6 h-6 animate-spin" />
-                      <span>AUTHENTICATING...</span>
+                      <span>READING CAMERA SENSOR...</span>
                     </>
                   ) : (
                     <>
-                      <span>AUTHORIZE WITH PALM</span>
+                      <span>CAPTURE &amp; AUTHORIZE PALM</span>
                       <ArrowRight className="w-6 h-6 stroke-[3]" />
                     </>
                   )}
@@ -596,11 +600,19 @@ export default function App() {
                 {lastScan ? (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black ${
-                        lastScan.accepted ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
-                      }`}>
-                        {lastScan.accepted ? '✓' : '✕'}
-                      </div>
+                      {lastScan.clahe_base64 ? (
+                        <img 
+                          src={`data:image/png;base64,${lastScan.clahe_base64}`} 
+                          alt="Vein ROI" 
+                          className="w-11 h-11 rounded-xl border-[2px] border-black shadow-[2px_2px_0px_#121212] object-cover bg-black"
+                        />
+                      ) : (
+                        <div className={`w-10 h-10 rounded-xl border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black ${
+                          lastScan.accepted ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
+                        }`}>
+                          {lastScan.accepted ? '✓' : '✕'}
+                        </div>
+                      )}
                       <div>
                         <h4 className="font-display font-black text-sm">{lastScan.username || 'Unrecognized Palm'}</h4>
                         <p className="text-xs font-bold text-[#666]">Score: {lastScan.score.toFixed(4)} ({lastScan.time_ms}ms)</p>
@@ -626,7 +638,7 @@ export default function App() {
             <div className="space-y-4 animate-fadeIn">
               <div>
                 <h2 className="font-display font-black text-xl tracking-tight">ENROLL PALM TEMPLATES</h2>
-                <p className="text-xs font-bold text-[#666]">6 multi-angle captures for 99.9% accuracy</p>
+                <p className="text-xs font-bold text-[#666]">6 multi-angle live camera captures (minimum 3 required)</p>
               </div>
 
               {/* Username Input Card */}
@@ -637,7 +649,7 @@ export default function App() {
                     type="text"
                     value={enrollUsername}
                     onChange={e => setEnrollUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
-                    placeholder="e.g. sepideh-palm"
+                    placeholder="e.g. yesh-palm"
                     className="w-full px-4 py-3 bg-white border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm outline-none focus:bg-[#FFFDF0]"
                   />
                   <div className="absolute right-3 top-2.5 text-xs font-black px-2 py-0.5 bg-[#FFDE59] border-[1.5px] border-black rounded-md">
@@ -646,10 +658,10 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 6 Step Indicators */}
+              {/* 6 Step Indicators with Real Captured Thumbnails */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212] space-y-2.5">
                 <div className="flex justify-between items-center">
-                  <span className="font-display font-black text-xs uppercase tracking-wider">SAMPLE PROGRESS</span>
+                  <span className="font-display font-black text-xs uppercase tracking-wider">LIVE SAMPLE PROGRESS</span>
                   <span className="text-xs font-black px-2 py-0.5 bg-[#38BDF8] border-[1.5px] border-black rounded-full">
                     {enrollSamples.length} / 6 SAMPLES
                   </span>
@@ -657,32 +669,39 @@ export default function App() {
 
                 <div className="grid grid-cols-6 gap-2">
                   {[0, 1, 2, 3, 4, 5].map(idx => {
-                    const isDone = idx < enrollSamples.length;
+                    const sample = enrollSamples[idx];
+                    const isDone = !!sample;
                     return (
                       <div
                         key={idx}
-                        className={`h-11 rounded-xl border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm transition-all neo-btn ${
+                        className={`h-12 rounded-xl border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm transition-all neo-btn overflow-hidden ${
                           isDone ? 'bg-[#CCFF00] scale-105' : 'bg-[#F4F4F0] text-[#888]'
                         }`}
                       >
-                        {isDone ? '✓' : idx + 1}
+                        {isDone && sample.thumb ? (
+                          <img src={`data:image/png;base64,${sample.thumb}`} alt={`Sample ${idx+1}`} className="w-full h-full object-cover" />
+                        ) : isDone ? (
+                          '✓'
+                        ) : (
+                          idx + 1
+                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Action Buttons with Neobrutalism Hover Effect */}
+              {/* Action Buttons */}
               <div className="space-y-2.5">
                 <button
                   onClick={handleCaptureSample}
-                  disabled={isCapturingSample || enrollSamples.length >= 6 || !enrollUsername.trim()}
+                  disabled={isCapturingSample || enrollSamples.length >= 6 || !enrollUsername.trim() || !cameraReady}
                   className="w-full py-3.5 bg-[#FF4081] text-white border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm flex items-center justify-center gap-2 neo-btn hover:bg-[#ff2872] disabled:opacity-50"
                 >
                   <Camera className="w-5 h-5" />
                   <span>
                     {isCapturingSample 
-                      ? 'CAPTURING & ENHANCING...' 
+                      ? 'CAPTURING FROM CAMERA...' 
                       : enrollSamples.length >= 6 
                       ? 'ALL 6 SAMPLES COLLECTED ✓' 
                       : `CAPTURE SAMPLE [${enrollSamples.length + 1}/6]`}
@@ -695,34 +714,35 @@ export default function App() {
                   className="w-full py-3.5 bg-[#FFDE59] text-black border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-sm flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe26b] disabled:opacity-40"
                 >
                   <CheckCircle2 className="w-5 h-5" />
-                  <span>SAVE TO BIOMETRIC DATABASE</span>
+                  <span>SAVE TO BIOMETRIC DATABASE ({enrollSamples.length} SAMPLES)</span>
                 </button>
               </div>
 
-              {/* Quality Banner */}
-              <div className="bg-[#38BDF8] border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212]">
-                <h4 className="font-display font-black text-xs uppercase mb-0.5">POSITIONING GUIDE</h4>
-                <p className="text-xs font-bold text-black leading-snug">
-                  {enrollStatusMsg || 'Hold palm flat ~10–15cm above sensor. Minimum 3 samples required to save.'}
+              {/* Guidance Banner */}
+              <div className={`border-[3px] border-black rounded-2xl p-3.5 shadow-[4px_4px_0px_#121212] ${
+                enrollStatusMsg.includes('failed') || enrollStatusMsg.includes('not detected') ? 'bg-[#FF7A00] text-white' : 'bg-[#38BDF8] text-black'
+              }`}>
+                <h4 className="font-display font-black text-xs uppercase mb-0.5">CAMERA GUIDANCE</h4>
+                <p className="text-xs font-bold leading-snug">
+                  {enrollStatusMsg || 'Hold palm flat ~10–15cm above sensor with fingers spread slightly. Minimum 3 samples required to save.'}
                 </p>
               </div>
             </div>
           )}
 
           {/* ══════════════════════════════════════════════════════════
-              PAGE 4: FRIENDS & USER PROFILES (Dribbble List Style)
+              PAGE 4: FRIENDS & USER PROFILES
              ══════════════════════════════════════════════════════════ */}
           {activeTab === 'users' && (
             <div className="space-y-3.5 animate-fadeIn">
               
-              {/* Search Bar matching Dribbble Reference */}
               <div className="relative">
                 <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-black stroke-[3]" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search ..."
+                  placeholder="Search enrolled users..."
                   className="w-full pl-10 pr-12 py-2.5 bg-white border-[3px] border-black rounded-2xl shadow-[3px_3px_0px_#121212] font-display font-bold text-sm outline-none"
                 />
                 <button 
@@ -733,14 +753,10 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Users List Cards */}
               <div className="space-y-2.5">
                 {filteredUsers.length > 0 ? (
                   filteredUsers.map((u, i) => {
                     const avatarColor = ['bg-[#FFDE59]', 'bg-[#38BDF8]', 'bg-[#CCFF00]', 'bg-[#FF4081]', 'bg-[#A855F7]'][i % 5];
-                    const randomStars = [35, 10, 20, 40, 75][i % 5];
-                    const samplePhrases = ['No time to waste!', 'Hey! Ready to pay.', 'Start something that matters!', 'I am ready!', 'Ready for a win!'];
-
                     return (
                       <div
                         key={u.username}
@@ -752,10 +768,8 @@ export default function App() {
                           </div>
                           <div>
                             <h4 className="font-display font-black text-sm leading-tight">{u.username}</h4>
-                            <p className="text-[10px] font-bold text-[#666]">{samplePhrases[i % samplePhrases.length]}</p>
                             <div className="flex items-center gap-1 mt-0.5">
-                              <Star className="w-3 h-3 fill-[#FFDE59] text-black" />
-                              <span className="text-[10px] font-black">{randomStars} Stars</span>
+                              <span className="text-[10px] font-black text-[#00aa44]">Active Template</span>
                               <span className="text-[9px] text-[#888] ml-1">• {u.sample_count} Samples</span>
                             </div>
                           </div>
@@ -773,8 +787,8 @@ export default function App() {
                   })
                 ) : (
                   <div className="bg-[#FFDE59] border-[3px] border-black rounded-2xl p-6 shadow-[4px_4px_0px_#121212] text-center space-y-2">
-                    <p className="font-display font-black text-base">No Users Found</p>
-                    <p className="text-xs font-bold text-[#333]">Tap the ENROLL tab to register palm templates.</p>
+                    <p className="font-display font-black text-base">No Enrolled Users</p>
+                    <p className="text-xs font-bold text-[#333]">Tap the ENROLL tab to capture live palm templates.</p>
                   </div>
                 )}
               </div>
@@ -788,7 +802,7 @@ export default function App() {
             <div className="space-y-3.5 animate-fadeIn">
               <div>
                 <h2 className="font-display font-black text-xl tracking-tight">SYSTEM DIAGNOSTICS</h2>
-                <p className="text-xs font-bold text-[#666]">Hardware status & biometric separation matrix</p>
+                <p className="text-xs font-bold text-[#666]">Hardware status &amp; biometric separation matrix</p>
               </div>
 
               {/* Accuracy Report Trigger Card */}
@@ -798,7 +812,7 @@ export default function App() {
               >
                 <div>
                   <h3 className="font-display font-black text-sm">ACCURACY REPORT MATRIX</h3>
-                  <p className="text-xs font-bold text-[#444]">View Self-Match & Cross-Match scores</p>
+                  <p className="text-xs font-bold text-[#444]">View Self-Match &amp; Cross-Match scores</p>
                 </div>
                 <div className="w-9 h-9 rounded-xl bg-white border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black">
                   📊
@@ -810,8 +824,8 @@ export default function App() {
                 <h4 className="font-display font-black text-xs uppercase tracking-wider text-[#888]">COMPUTE SPECIFICATIONS</h4>
                 <div className="grid grid-cols-2 gap-2 text-xs font-black">
                   <div className="p-2.5 bg-[#FFFDF0] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212]">
-                    <span className="block text-[10px] text-[#666]">CAMERA SENSOR</span>
-                    <span>{cameraReady ? 'RPi NoIR v2 (Live)' : 'Mock / Offline'}</span>
+                    <span className="block text-[10px] text-[#666]">CAMERA DRIVER</span>
+                    <span>{cameraType}</span>
                   </div>
                   <div className="p-2.5 bg-[#FFFDF0] border-[2px] border-black rounded-xl shadow-[2px_2px_0px_#121212]">
                     <span className="block text-[10px] text-[#666]">PARALLEL MATCHER</span>
@@ -909,7 +923,7 @@ export default function App() {
                 <p className="font-bold text-sm text-[#444] mt-1">
                   {resultOverlay.accepted 
                     ? `Biometric token confirmed for ${resultOverlay.username}`
-                    : 'Palm does not match enrolled records'}
+                    : 'Palm does not match enrolled records in database'}
                 </p>
               </div>
 
@@ -947,7 +961,7 @@ export default function App() {
             <div className="w-full bg-white border-[4px] border-black rounded-3xl p-6 shadow-[6px_6px_0px_#121212] text-center space-y-4">
               <h3 className="font-display font-black text-xl">DELETE PROFILE?</h3>
               <p className="text-sm font-bold text-[#666]">
-                Deactivate biometric template for <span className="text-[#FF4081] font-black">'{deleteTarget}'</span>?
+                Permanently delete biometric template for <span className="text-[#FF4081] font-black">'{deleteTarget}'</span>?
               </p>
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <button
