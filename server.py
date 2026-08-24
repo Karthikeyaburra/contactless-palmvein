@@ -15,7 +15,7 @@ import numpy as np
 import mimetypes
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -202,6 +202,47 @@ class SaveReq(BaseModel):
 
 
 # API Endpoints
+def generate_video_stream():
+    """MJPEG stream of live camera for real-time positioning on screen."""
+    while True:
+        try:
+            if CAMERA_TYPE == "picamera2" and picam2 is not None:
+                frame = picam2.capture_array()
+                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            elif CAMERA_TYPE == "opencv" and cv_cap is not None:
+                ret, frame = cv_cap.read()
+                if not ret or frame is None:
+                    time.sleep(0.05)
+                    continue
+                bgr = frame
+            else:
+                bgr = np.full((480, 640, 3), 30, dtype=np.uint8)
+                cv2.putText(bgr, "CAMERA OFFLINE", (180, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            # Draw center alignment box
+            h, w, _ = bgr.shape
+            cx, cy = w // 2, h // 2
+            box_sz = 120
+            cv2.rectangle(bgr, (cx - box_sz, cy - box_sz), (cx + box_sz, cy + box_sz), (0, 255, 200), 2)
+            cv2.putText(bgr, "ALIGN PALM HERE", (cx - 95, cy - box_sz - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 2)
+
+            ret, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ret:
+                time.sleep(0.04)
+                continue
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.04)
+        except Exception:
+            time.sleep(0.1)
+
+
+@app.get("/api/video_feed")
+def video_feed():
+    return StreamingResponse(generate_video_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
 @app.get("/api/status")
 def get_status():
     users = list_users()

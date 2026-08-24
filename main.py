@@ -194,18 +194,68 @@ def _consistency_check(veincode_list: list) -> int:
     return len(bad)
 
 
-def _countdown(seconds=5, message="Get ready"):
-    """Visual countdown timer in terminal so user can position palm."""
-    print(f"  --> {message}")
-    for s in range(seconds, 0, -1):
-        print(f"      [{s}s] Steady palm over camera...", end="\r", flush=True)
-        time.sleep(1)
+def _live_preview_and_capture(seconds=5, hint="Position palm in center box"):
+    """
+    Shows live on-screen camera feed with alignment target and countdown timer.
+    User sees their actual palm in real time and aligns it before capture.
+    """
+    win_name = "Live Camera - Palm Alignment"
+    has_gui = False
+    try:
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(win_name, 640, 480)
+        has_gui = True
+    except Exception:
+        has_gui = False
+
+    t_end = time.time() + seconds
+    while time.time() < t_end:
+        rem = max(1, int(t_end - time.time() + 0.99))
+        print(f"      [{rem}s] Position palm in camera view...", end="\r", flush=True)
+
+        if has_gui and CAMERA_AVAILABLE and picam2 is not None:
+            try:
+                frame = picam2.capture_array()
+                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                h, w, _ = bgr.shape
+                cx, cy = w // 2, h // 2
+                box_sz = 140
+
+                # Draw Target Guide Box (Neon Green)
+                cv2.rectangle(bgr, (cx - box_sz, cy - box_sz), (cx + box_sz, cy + box_sz), (0, 255, 200), 2)
+                cv2.putText(bgr, "ALIGN PALM HERE", (cx - 100, cy - box_sz - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 2)
+
+                # Draw Header Timer
+                cv2.rectangle(bgr, (0, 0), (w, 50), (0, 0, 0), -1)
+                cv2.putText(bgr, f"CAPTURING IN: {rem}s", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 230, 255), 2)
+
+                # Draw Hint Footer
+                cv2.rectangle(bgr, (0, h - 40), (w, h), (0, 0, 0), -1)
+                cv2.putText(bgr, hint, (20, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+                cv2.imshow(win_name, bgr)
+                key = cv2.waitKey(30) & 0xFF
+                if key == ord('q') or key == 27:
+                    break
+            except Exception:
+                time.sleep(0.05)
+        else:
+            time.sleep(0.1)
+
     print("      [📸 CAPTURING NOW!]                          ", flush=True)
+    if has_gui:
+        try:
+            cv2.destroyWindow(win_name)
+            cv2.waitKey(1)
+        except Exception:
+            pass
+
+    return _capture_gray()
 
 
 def _capture_one_sample(landmarker, username: str, idx: int, guidance: str = ""):
     """
-    Capture one palm sample with a 5-second countdown and one retry on failure.
+    Capture one palm sample with live on-screen camera feed and a 5-second countdown.
     Returns (gray, clahe_roi, code, elapsed) on success, or None on double fail.
     """
     sample_hints = [
@@ -220,18 +270,18 @@ def _capture_one_sample(landmarker, username: str, idx: int, guidance: str = "")
 
     for attempt in range(2):
         if attempt == 1:
-            print("    [!] Landmark detection failed. Retrying...")
+            print("    [!] Landmark detection failed. Opening camera again to retry...")
         
-        _countdown(5, hint)
+        print(f"  --> {hint}")
         t0   = time.time()
-        gray = _capture_gray()
+        gray = _live_preview_and_capture(5, hint)
         try:
             clahe_roi, code = process_frame(gray, landmarker)
             return gray, clahe_roi, code, time.time() - t0
         except ValueError as e:
             print(f"    [!] Failed: {e}")
             if attempt == 0:
-                print("    Press ENTER to start 5-second countdown retry...")
+                print("    Press ENTER to open camera and retry countdown...")
                 input()
     print("    [!] Sample failed twice — skipping.")
     return None
@@ -288,16 +338,14 @@ def opt_enroll(landmarker, engine):
 # ---------------------------------------------------------------------------
 
 def opt_scan(landmarker, engine):
-    """Capture one palm with a 3-second timer and identify the user."""
+    """Capture one palm with live on-screen camera feed and 3-second countdown."""
     if not CAMERA_AVAILABLE:
         _no_camera()
         return
 
-    input("  Press ENTER to start 3-second scan countdown...")
-    _countdown(3, "Hold palm steady over sensor")
-
+    input("  Press ENTER to open camera and start 3-second scan countdown...")
     t0   = time.time()
-    gray = _capture_gray()
+    gray = _live_preview_and_capture(3, "Hold palm steady inside green alignment box")
 
     try:
         clahe_roi, probe_code = process_frame(gray, landmarker)

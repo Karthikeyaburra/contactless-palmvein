@@ -527,34 +527,51 @@ export default function App() {
                 })}
               </div>
 
-              {/* Radar Scanner Viewport */}
-              <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center">
+              {/* Live Camera Viewport with Countdown Overlay */}
+              <div className="bg-white border-[3px] border-black rounded-3xl p-4 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center">
                 <span className="absolute top-2.5 left-2.5 text-xs font-black text-black select-none">+</span>
                 <span className="absolute top-2.5 right-2.5 text-xs font-black text-black select-none">+</span>
 
-                {/* Radar Concentric Circles with Countdown Overlay */}
-                <div className="relative w-44 h-44 flex items-center justify-center my-2">
-                  <div className={`absolute inset-0 rounded-full border-[3px] border-black ${
-                    scanCountdown !== null || isScanning ? 'bg-[#FF4081]/20 animate-ping' : 'bg-[#FFFDF0]'
-                  }`} />
-                  <div className={`w-36 h-36 rounded-full border-[3px] border-[#38BDF8] flex items-center justify-center ${
-                    isScanning ? 'animate-spin' : 'animate-pulse'
-                  }`}>
-                    <div className="w-24 h-24 rounded-full bg-[#FFDE59] border-[3px] border-black shadow-[3px_3px_0px_#121212] flex items-center justify-center">
-                      {scanCountdown !== null ? (
-                        <span className="font-display font-black text-4xl animate-bounce">{scanCountdown}</span>
-                      ) : (
-                        <PalmIcon className={`w-14 h-14 ${isScanning ? 'animate-bounce text-[#FF4081]' : 'text-black'}`} animated={isScanning} />
-                      )}
+                {/* Live Stream Frame */}
+                <div className="relative w-52 h-48 rounded-2xl border-[3px] border-black shadow-[4px_4px_0px_#121212] overflow-hidden bg-black flex items-center justify-center my-1.5">
+                  {cameraReady ? (
+                    <img 
+                      src="/api/video_feed" 
+                      alt="Live Camera Feed" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="text-center p-3 text-white">
+                      <PalmIcon className="w-12 h-12 text-[#FFDE59] mx-auto mb-1" />
+                      <span className="text-[10px] font-black">CONNECT PI CAMERA</span>
                     </div>
-                  </div>
+                  )}
+
+                  {/* On-Screen 3s Countdown Overlay */}
+                  {scanCountdown !== null && (
+                    <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center animate-fadeIn">
+                      <span className="font-display font-black text-6xl text-[#FFDE59] drop-shadow-[2px_2px_0px_#000] animate-bounce">
+                        {scanCountdown}
+                      </span>
+                      <span className="text-[11px] font-black text-white bg-black/80 px-2 py-0.5 rounded-md mt-1">
+                        STEADY PALM
+                      </span>
+                    </div>
+                  )}
+
+                  {isScanning && (
+                    <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center animate-fadeIn text-white">
+                      <RefreshCw className="w-8 h-8 animate-spin text-[#38BDF8] mb-1" />
+                      <span className="text-xs font-black text-[#CCFF00]">AUTHENTICATING...</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-1 text-center">
                   <span className={`inline-block px-3.5 py-1 rounded-full text-xs font-black border-[2px] border-black shadow-[2px_2px_0px_#121212] ${
                     scanCountdown !== null ? 'bg-[#FFDE59] text-black animate-pulse' : isScanning ? 'bg-[#FF7A00] text-white' : cameraReady ? 'bg-[#CCFF00]' : 'bg-[#FF4081] text-white'
                   }`}>
-                    {scanCountdown !== null ? `STEADY PALM (${scanCountdown}s)...` : isScanning ? 'CAPTURING & MATCHING...' : cameraReady ? `READY: ${selectedAuthAction.name.toUpperCase()}` : 'CAMERA OFFLINE'}
+                    {scanCountdown !== null ? `STEADY PALM (${scanCountdown}s)...` : isScanning ? 'MATCHING GABOR VEINCODE...' : cameraReady ? `READY: ${selectedAuthAction.name.toUpperCase()}` : 'CAMERA OFFLINE'}
                   </span>
                 </div>
               </div>
