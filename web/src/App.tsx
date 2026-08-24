@@ -9,28 +9,27 @@ import {
   CheckCircle2, 
   XCircle, 
   Camera, 
-  Fingerprint, 
   Trash2, 
   Search, 
   Plus, 
   Sparkles, 
   Database, 
-  ArrowRight,
-  RefreshCw,
-  Clock,
-  CreditCard,
-  Coffee,
-  ShoppingBag,
-  Zap,
-  Star,
-  Compass,
-  Lock,
-  ChevronRight,
-  Flame,
-  Award,
-  Layers,
-  HelpCircle,
-  Eye
+  ArrowRight, 
+  RefreshCw, 
+  Clock, 
+  CreditCard, 
+  Zap, 
+  Star, 
+  Compass, 
+  Lock, 
+  ChevronRight, 
+  Flame, 
+  Award, 
+  Layers, 
+  Smartphone, 
+  Coins, 
+  Send, 
+  Receipt 
 } from 'lucide-react';
 
 interface User {
@@ -47,13 +46,69 @@ interface ScanResult {
   threshold: number;
   time_ms: number;
   clahe_base64?: string;
-  item_name?: string;
-  amount?: number;
+  action_type?: string;
 }
 
 interface ReportData {
   self_matches?: Array<[string, number, number, number, string]>;
   cross_matches?: Array<[string, number, string]>;
+}
+
+// ── Custom Palm Vein SVG Icon (Detailed 5-finger palm with biometric vein grid) ──
+function PalmIcon({ className = "w-12 h-12 text-black", animated = false }: { className?: string; animated?: boolean }) {
+  return (
+    <svg 
+      viewBox="0 0 100 100" 
+      fill="currentColor" 
+      className={`${className} ${animated ? 'animate-pulse' : ''}`}
+    >
+      {/* Palm Base & 5 Fingers Outline */}
+      <path 
+        d="M28 42 C28 32, 33 32, 33 42 L33 55 C33 57, 36 57, 36 55 L36 28 C36 18, 42 18, 42 28 L42 53 C42 55, 45 55, 45 53 L45 22 C45 12, 51 12, 51 22 L51 53 C51 55, 54 55, 54 53 L54 30 C54 20, 60 20, 60 30 L60 58 C60 60, 63 60, 63 58 L65 46 C67 38, 74 40, 72 49 L69 64 C65 78, 56 86, 46 86 C34 86, 26 76, 26 62 L26 42 Z" 
+        fill="none" 
+        stroke="currentColor" 
+        strokeWidth="5" 
+        strokeLinecap="round" 
+        strokeLinejoin="round" 
+      />
+      {/* Sub-dermal Vein Pattern Nodes */}
+      <path 
+        d="M48 80 L48 65 M48 65 L38 52 M48 65 L58 52 M38 52 L38 40 M58 52 L58 40 M48 52 L48 35" 
+        fill="none" 
+        stroke={animated ? "#38BDF8" : "currentColor"} 
+        strokeWidth="3.5" 
+        strokeLinecap="round" 
+        strokeDasharray={animated ? "2 3" : "none"}
+      />
+      {/* Biometric Sensor Points */}
+      <circle cx="48" cy="65" r="3.5" fill="#FFDE59" stroke="#121212" strokeWidth="2" />
+      <circle cx="38" cy="52" r="3" fill="#CCFF00" stroke="#121212" strokeWidth="1.5" />
+      <circle cx="58" cy="52" r="3" fill="#CCFF00" stroke="#121212" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// ── Hand-Drawn Scribble / Highlighter SVG for Active Nav & Badges (from Dribbble) ──
+function ScribbleBadge({ children, color = "#FFDE59", className = "" }: { children: React.ReactNode; color?: string; className?: string }) {
+  return (
+    <div className={`relative inline-flex items-center justify-center ${className}`}>
+      {/* Asymmetric hand-drawn scribble background */}
+      <svg 
+        className="absolute inset-0 w-full h-full -z-0 scale-110 pointer-events-none" 
+        viewBox="0 0 120 45" 
+        preserveAspectRatio="none"
+      >
+        <path 
+          d="M 6,24 C 18,7 48,5 98,10 C 114,12 118,22 110,33 C 98,42 42,44 14,38 C 4,36 2,30 6,24 Z" 
+          fill={color} 
+          stroke="#121212" 
+          strokeWidth="2.5" 
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div className="relative z-10">{children}</div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -63,11 +118,12 @@ export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Payment Terminal mode in Scan tab
-  const [selectedPayItem, setSelectedPayItem] = useState<{ name: string; price: number; icon: string }>({
-    name: 'Espresso Coffee',
-    price: 4.50,
-    icon: '☕'
+  // Authorization mode in Scan tab (NO PRICING - Pure Biometric Actions)
+  const [selectedAuthAction, setSelectedAuthAction] = useState<{ id: string; name: string; desc: string; icon: string }>({
+    id: 'pay',
+    name: 'Palm Pay Auth',
+    desc: 'Instant Token Transfer',
+    icon: '💳'
   });
 
   // Scanning State
@@ -123,7 +179,7 @@ export default function App() {
   }, []);
 
   // Trigger Scan
-  const handleScan = async (isPayment = false) => {
+  const handleScan = async (actionType = 'Palm Pay Auth') => {
     if (isScanning) return;
     setIsScanning(true);
 
@@ -133,8 +189,7 @@ export default function App() {
         const data: ScanResult = await res.json();
         const finalRes: ScanResult = {
           ...data,
-          item_name: isPayment ? selectedPayItem.name : undefined,
-          amount: isPayment ? selectedPayItem.price : undefined,
+          action_type: actionType,
         };
         setLastScan(finalRes);
         setResultOverlay(finalRes);
@@ -148,15 +203,13 @@ export default function App() {
           });
         }
       } else {
-        // Fallback demo result
         const mockResult: ScanResult = {
           accepted: true,
           username: users[0]?.username || 'yesh-right',
           score: 0.1153,
           threshold: 0.3800,
           time_ms: 280,
-          item_name: isPayment ? selectedPayItem.name : undefined,
-          amount: isPayment ? selectedPayItem.price : undefined,
+          action_type: actionType,
         };
         setLastScan(mockResult);
         setResultOverlay(mockResult);
@@ -174,8 +227,7 @@ export default function App() {
         score: 0.1153,
         threshold: 0.3800,
         time_ms: 280,
-        item_name: isPayment ? selectedPayItem.name : undefined,
-        amount: isPayment ? selectedPayItem.price : undefined,
+        action_type: actionType,
       };
       setLastScan(mockResult);
       setResultOverlay(mockResult);
@@ -305,7 +357,7 @@ export default function App() {
             className="flex items-center gap-2.5 cursor-pointer neo-btn"
           >
             <div className="w-10 h-10 rounded-full bg-[#FFDE59] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black text-base">
-              🖐️
+              <PalmIcon className="w-6 h-6 text-black" />
             </div>
             <div>
               <h1 className="font-display font-black text-base leading-none">Sam Smith</h1>
@@ -314,10 +366,13 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="px-2.5 py-1 bg-[#38BDF8] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] text-xs font-black flex items-center gap-1">
-              <Star className="w-3.5 h-3.5 fill-[#FFDE59] text-black" />
-              <span>15 Stars</span>
-            </div>
+            <ScribbleBadge color="#38BDF8">
+              <div className="px-3 py-0.5 text-xs font-black flex items-center gap-1">
+                <Star className="w-3.5 h-3.5 fill-[#FFDE59] text-black" />
+                <span>15 Stars</span>
+              </div>
+            </ScribbleBadge>
+
             <button 
               onClick={() => setActiveTab('landing')}
               className="w-8 h-8 rounded-full bg-[#FFDE59] border-[2px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-black text-xs neo-btn"
@@ -344,45 +399,60 @@ export default function App() {
         <main className="flex-1 overflow-y-auto px-5 py-4 pb-28 space-y-4">
 
           {/* ══════════════════════════════════════════════════════════
-              PAGE 1: ANIMATED LANDING PAGE (Dribbble Hero Experience)
+              PAGE 1: ANIMATED PAYMENT & FINTECH LANDING PAGE
              ══════════════════════════════════════════════════════════ */}
           {activeTab === 'landing' && (
             <div className="space-y-4 animate-fadeIn">
               
-              {/* Illustrated Geometric Hero Card */}
+              {/* Dynamic Animated Fintech Hero Card */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center text-center">
                 
-                {/* Floating Geometric Elements (from Dribbble reference) */}
+                {/* Floating Geometric Elements & Payment Badges */}
                 <div className="absolute top-2 left-3 w-8 h-8 border-[2px] border-black bg-[#FFDE59] rounded-md grid grid-cols-2 grid-rows-2">
                   <div className="border-r border-b border-black"></div>
                   <div className="border-b border-black"></div>
                   <div className="border-r border-black"></div>
                 </div>
 
-                <div className="absolute top-3 right-3 w-8 h-8 bg-[#38BDF8] border-[2px] border-black rounded-md flex items-center justify-center text-[10px] font-black">
-                  📐
+                <div className="absolute top-3 right-3 px-2 py-0.5 bg-[#38BDF8] border-[2px] border-black rounded-lg text-[10px] font-black shadow-[2px_2px_0px_#121212] animate-float">
+                  💳 TAP & PAY
                 </div>
 
-                {/* Main Avatar / Character Badge */}
-                <div className="relative my-2">
-                  <div className="w-24 h-24 rounded-full bg-[#FFFDF0] border-[3.5px] border-black shadow-[4px_4px_0px_#121212] flex items-center justify-center relative overflow-hidden">
-                    <span className="text-5xl">👤</span>
+                {/* Illustrated Payment Scene: Phone, Hand Wave, and Floating Coins */}
+                <div className="relative my-3 w-full flex items-center justify-center">
+                  
+                  {/* Floating Gold Coin 1 */}
+                  <div className="absolute -left-1 top-2 w-9 h-9 rounded-full bg-[#FFDE59] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center font-display font-black text-sm animate-bounce">
+                    🪙
                   </div>
-                  {/* Cursor sticker */}
-                  <div className="absolute -bottom-1 -right-2 w-7 h-7 bg-[#FFDE59] border-[2px] border-black rounded-full shadow-[2px_2px_0px_#121212] flex items-center justify-center text-xs">
-                    ✋
+
+                  {/* Smartphone Terminal Card */}
+                  <div className="relative w-28 h-36 bg-[#FFFDF0] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] flex flex-col items-center justify-between p-2 overflow-hidden">
+                    <div className="w-8 h-1 bg-black rounded-full mb-1"></div>
+                    <div className="w-16 h-16 rounded-full bg-[#CCFF00] border-[2.5px] border-black shadow-[2px_2px_0px_#121212] flex items-center justify-center animate-pulse">
+                      <PalmIcon className="w-10 h-10 text-black" animated={true} />
+                    </div>
+                    <div className="w-full py-1 bg-[#38BDF8] border-[1.5px] border-black rounded-md text-[9px] font-black text-center uppercase tracking-tighter">
+                      VEINPAY POS
+                    </div>
+                  </div>
+
+                  {/* Floating Transfer Token Pill */}
+                  <div className="absolute -right-1 bottom-4 px-2.5 py-1 rounded-xl bg-[#FF4081] text-white border-[2px] border-black shadow-[2px_2px_0px_#121212] text-[10px] font-black flex items-center gap-1 animate-wiggle">
+                    <Zap className="w-3 h-3 fill-white" />
+                    <span>0.28s Instant</span>
                   </div>
                 </div>
 
-                {/* Catchy Dribbble Typography */}
+                {/* Dribbble Typography Headline */}
                 <div className="space-y-1 my-2">
                   <h2 className="font-display font-black text-xl leading-tight">
                     Sepideh <span className="text-[#FF4081]">just authorized</span> her payment for today!
                   </h2>
-                  <p className="text-xs font-bold text-[#666]">Sub-dermal infrared vein biometrics. 100% forgery proof.</p>
+                  <p className="text-xs font-bold text-[#666]">Zero cards, zero phones. Complete contactless palm security.</p>
                 </div>
 
-                {/* Primary CTA Button */}
+                {/* Primary CTA Button (Scribble-style press animation) */}
                 <button
                   onClick={() => setActiveTab('scan')}
                   className="mt-2 w-full py-3.5 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[4px_4px_0px_#121212] font-display font-black text-base flex items-center justify-center gap-2 neo-btn hover:bg-[#ffe373]"
@@ -392,36 +462,36 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Countdown / Metrics Card (from Dribbble mockup) */}
+              {/* Countdown / Challenge Metric Card (from Dribbble mockup) */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-4 shadow-[5px_5px_0px_#121212] space-y-3">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="font-display font-black text-sm">Biometric Checkout #5</h3>
-                    <p className="text-[11px] font-bold text-[#666]">Instant contactless palm terminal</p>
+                    <h3 className="font-display font-black text-sm">Design challenge 5</h3>
+                    <p className="text-[11px] font-bold text-[#666]">Palm vein biometric terminal v2.0</p>
                   </div>
                   <div className="flex text-xs">⭐⭐⭐⭐☆</div>
                 </div>
 
-                {/* 3 Metric Countdown Blocks (1 : 15 : 32) */}
+                {/* 3 Metric Blocks (Days : Hours : Minutes style from reference) */}
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">0.28</span>
-                    <span className="text-[10px] font-black text-[#FF4081] uppercase">Seconds</span>
+                    <span className="font-display font-black text-2xl block leading-none">1</span>
+                    <span className="text-[10px] font-black text-[#FF4081] uppercase">Days</span>
                   </div>
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">0.11</span>
-                    <span className="text-[10px] font-black text-[#38BDF8] uppercase">MNHD Score</span>
+                    <span className="font-display font-black text-2xl block leading-none">15</span>
+                    <span className="text-[10px] font-black text-[#38BDF8] uppercase">Hours</span>
                   </div>
                   <div className="p-2 bg-[#FFFDF0] border-[2.5px] border-black rounded-2xl shadow-[2px_2px_0px_#121212]">
-                    <span className="font-display font-black text-2xl block leading-none">{users.length}</span>
-                    <span className="text-[10px] font-black text-[#00aa44] uppercase">Profiles</span>
+                    <span className="font-display font-black text-2xl block leading-none">32</span>
+                    <span className="text-[10px] font-black text-[#00aa44] uppercase">Minutes</span>
                   </div>
                 </div>
 
                 <button
                   onClick={() => {
                     setActiveTab('scan');
-                    handleScan(true);
+                    handleScan('Palm Pay Auth');
                   }}
                   className="w-full py-3 bg-[#FFDE59] border-[2.5px] border-black rounded-2xl shadow-[3px_3px_0px_#121212] font-display font-black text-sm neo-btn hover:bg-[#ffe373]"
                 >
@@ -429,7 +499,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Quick Feature Grid */}
+              {/* Quick Navigation Cards */}
               <div className="grid grid-cols-2 gap-3">
                 <div 
                   onClick={() => setActiveTab('enroll')}
@@ -449,56 +519,56 @@ export default function App() {
                   <div className="w-8 h-8 rounded-full bg-white border-[2px] border-black flex items-center justify-center font-black text-sm mb-2">
                     👥
                   </div>
-                  <h4 className="font-display font-black text-sm">User Directory</h4>
-                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} enrolled templates</p>
+                  <h4 className="font-display font-black text-sm">Friends Directory</h4>
+                  <p className="text-[10px] font-bold text-black mt-0.5">{users.length} enrolled profiles</p>
                 </div>
               </div>
             </div>
           )}
 
           {/* ══════════════════════════════════════════════════════════
-              PAGE 2: SCAN & VEINPAY POINT-OF-SALE
+              PAGE 2: SCAN & PALM AUTHENTICATION TERMINAL
              ══════════════════════════════════════════════════════════ */}
           {activeTab === 'scan' && (
             <div className="space-y-4 animate-fadeIn">
               
-              {/* POS Mode Switcher */}
-              <div className="bg-white border-[3px] border-black rounded-2xl p-2 shadow-[3px_3px_0px_#121212] flex gap-1">
+              {/* Action Mode Switcher (NO PRICING - Pure Authentication Actions) */}
+              <div className="bg-white border-[3px] border-black rounded-2xl p-1.5 shadow-[3px_3px_0px_#121212] flex gap-1">
                 {[
-                  { name: 'Espresso Coffee', price: 4.50, icon: '☕' },
-                  { name: 'Store Purchase', price: 28.00, icon: '🛍️' },
-                  { name: 'Door Access', price: 0.00, icon: '🔑' },
-                ].map(item => {
-                  const isSel = selectedPayItem.name === item.name;
+                  { id: 'pay', name: 'Palm Pay Auth', desc: 'Payment Token', icon: '💳' },
+                  { id: 'door', name: 'Door Access', desc: 'Secure Entry', icon: '🔑' },
+                  { id: 'vault', name: 'Identity Verify', desc: 'High Security', icon: '🛡️' },
+                ].map(act => {
+                  const isSel = selectedAuthAction.id === act.id;
                   return (
                     <button
-                      key={item.name}
-                      onClick={() => setSelectedPayItem(item)}
+                      key={act.id}
+                      onClick={() => setSelectedAuthAction(act)}
                       className={`flex-1 py-2 px-1 rounded-xl text-xs font-black transition-all neo-btn flex flex-col items-center ${
                         isSel ? 'bg-[#FFDE59] border-[2px] border-black shadow-[2px_2px_0px_#121212]' : 'text-[#666]'
                       }`}
                     >
-                      <span className="text-base">{item.icon}</span>
-                      <span className="text-[10px] truncate max-w-[90px]">{item.name}</span>
-                      <span className="text-[9px] text-[#333]">${item.price.toFixed(2)}</span>
+                      <span className="text-base">{act.icon}</span>
+                      <span className="text-[10px] truncate max-w-[90px] font-display">{act.name}</span>
+                      <span className="text-[8px] text-[#444]">{act.desc}</span>
                     </button>
                   );
                 })}
               </div>
 
-              {/* Main Sensor Scanner Card */}
+              {/* Main Sensor Scanner Card with PALM ICON */}
               <div className="bg-white border-[3px] border-black rounded-3xl p-5 shadow-[6px_6px_0px_#121212] relative overflow-hidden flex flex-col items-center">
                 
                 {/* Decorative Crosses */}
                 <span className="absolute top-2.5 left-2.5 text-xs font-black text-black select-none">+</span>
                 <span className="absolute top-2.5 right-2.5 text-xs font-black text-black select-none">+</span>
 
-                {/* Radar Concentric Circles */}
+                {/* Radar Concentric Circles with PALM Silhouette */}
                 <div className="relative w-44 h-44 flex items-center justify-center my-2">
                   <div className={`absolute inset-0 rounded-full border-[3px] border-black ${isScanning ? 'bg-[#FF4081]/20 animate-ping' : 'bg-[#FFFDF0]'}`} />
                   <div className={`w-36 h-36 rounded-full border-[3px] border-[#38BDF8] flex items-center justify-center ${isScanning ? 'animate-spin' : 'animate-pulse'}`}>
                     <div className="w-24 h-24 rounded-full bg-[#FFDE59] border-[3px] border-black shadow-[3px_3px_0px_#121212] flex items-center justify-center">
-                      <Fingerprint className={`w-12 h-12 ${isScanning ? 'animate-bounce text-[#FF4081]' : 'text-black'}`} />
+                      <PalmIcon className={`w-14 h-14 ${isScanning ? 'animate-bounce text-[#FF4081]' : 'text-black'}`} animated={isScanning} />
                     </div>
                   </div>
                 </div>
@@ -507,7 +577,7 @@ export default function App() {
                   <span className={`inline-block px-3.5 py-1 rounded-full text-xs font-black border-[2px] border-black shadow-[2px_2px_0px_#121212] ${
                     isScanning ? 'bg-[#FF7A00] text-white' : 'bg-[#CCFF00]'
                   }`}>
-                    {isScanning ? 'MATCHING GABOR VEINCODE...' : `READY: ${selectedPayItem.name.toUpperCase()}`}
+                    {isScanning ? 'MATCHING GABOR VEINCODE...' : `READY: ${selectedAuthAction.name.toUpperCase()}`}
                   </span>
                 </div>
               </div>
@@ -515,7 +585,7 @@ export default function App() {
               {/* Action Buttons (Neobrutalism Hover Effect) */}
               <div className="space-y-2">
                 <button
-                  onClick={() => handleScan(true)}
+                  onClick={() => handleScan(selectedAuthAction.name)}
                   disabled={isScanning}
                   className="w-full py-4 bg-[#FFDE59] border-[3px] border-black rounded-2xl shadow-[5px_5px_0px_#121212] font-display font-black text-lg flex items-center justify-center gap-3 neo-btn hover:bg-[#ffe26b] disabled:opacity-50"
                 >
@@ -526,7 +596,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <span>PAY ${selectedPayItem.price.toFixed(2)} WITH PALM</span>
+                      <span>AUTHORIZE WITH PALM</span>
                       <ArrowRight className="w-6 h-6 stroke-[3]" />
                     </>
                   )}
@@ -536,7 +606,7 @@ export default function App() {
               {/* Last Scan Result Card */}
               <div className="bg-white border-[3px] border-black rounded-2xl p-4 shadow-[4px_4px_0px_#121212]">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-black uppercase text-[#888] tracking-wider">RECENT AUTHORIZATION</span>
+                  <span className="text-[11px] font-black uppercase text-[#888] tracking-wider">RECENT VERIFICATION</span>
                   <Clock className="w-3.5 h-3.5 text-[#888]" />
                 </div>
                 {lastScan ? (
@@ -656,7 +726,7 @@ export default function App() {
           )}
 
           {/* ══════════════════════════════════════════════════════════
-              PAGE 4: USER DIRECTORY & PROFILES (Dribbble List Style)
+              PAGE 4: FRIENDS & USER PROFILES (Dribbble List Style)
              ══════════════════════════════════════════════════════════ */}
           {activeTab === 'users' && (
             <div className="space-y-3.5 animate-fadeIn">
@@ -788,10 +858,10 @@ export default function App() {
           )}
         </main>
 
-        {/* ── BOTTOM NAVIGATION (Matching Dribbble Reference: Friends, Challenges, Stats) ── */}
+        {/* ── BOTTOM NAVIGATION (Matching Dribbble Reference: Friends, Challenges, Stats with Scribble Highlighter) ── */}
         <nav className="absolute bottom-0 left-0 right-0 h-[76px] bg-[#FFFDF0] border-t-[3px] border-black px-3 flex items-center justify-around z-20">
           {[
-            { id: 'landing', label: 'Home', icon: Compass },
+            { id: 'landing', label: 'Challenges', icon: Compass },
             { id: 'scan', label: 'Scan', icon: Scan },
             { id: 'enroll', label: 'Enroll', icon: UserPlus },
             { id: 'users', label: 'Friends', icon: Users },
@@ -803,14 +873,21 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`flex flex-col items-center justify-center transition-all neo-btn ${
-                  isActive
-                    ? 'px-4 py-1.5 bg-[#FFDE59] border-[2.5px] border-black rounded-full shadow-[2.5px_2.5px_0px_#121212]'
-                    : 'text-[#666] hover:text-black'
-                }`}
+                className={`flex flex-col items-center justify-center transition-all neo-btn group relative px-2.5 py-1`}
               >
-                <Icon className="w-4 h-4 stroke-[2.5]" />
-                <span className="text-[10px] font-display font-black tracking-tight">{tab.label}</span>
+                {isActive ? (
+                  <ScribbleBadge color="#FFDE59">
+                    <div className="px-3 py-1 flex items-center gap-1.5">
+                      <Icon className="w-4 h-4 stroke-[2.5] text-black" />
+                      <span className="text-[11px] font-display font-black tracking-tight text-black">{tab.label}</span>
+                    </div>
+                  </ScribbleBadge>
+                ) : (
+                  <div className="flex flex-col items-center text-[#666] group-hover:text-black transition-colors">
+                    <Icon className="w-4 h-4 stroke-[2.5]" />
+                    <span className="text-[10px] font-display font-black tracking-tight mt-0.5">{tab.label}</span>
+                  </div>
+                )}
               </button>
             );
           })}
@@ -840,11 +917,11 @@ export default function App() {
 
               <div>
                 <h3 className="font-display font-black text-2xl tracking-tight uppercase">
-                  {resultOverlay.accepted ? (resultOverlay.item_name ? 'PAYMENT APPROVED' : 'AUTHENTICATED') : 'NOT RECOGNISED'}
+                  {resultOverlay.accepted ? (resultOverlay.action_type || 'AUTHENTICATED') : 'NOT RECOGNISED'}
                 </h3>
                 <p className="font-bold text-sm text-[#444] mt-1">
                   {resultOverlay.accepted 
-                    ? (resultOverlay.item_name ? `Paid $${resultOverlay.amount?.toFixed(2)} for ${resultOverlay.item_name}` : `Welcome, ${resultOverlay.username}`)
+                    ? `Biometric token confirmed for ${resultOverlay.username}`
                     : 'Palm does not match enrolled records'}
                 </p>
               </div>
