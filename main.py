@@ -2,31 +2,21 @@
 """
 main.py
 -------
-Single interactive entry point for the Palm Vein Authentication System.
-Run on Raspberry Pi 5:  python3 main.py
-Run for offline dev:    python3 main.py  (camera unavailable — options 1/2 disabled)
+Live Palm Vein Biometrics System on Raspberry Pi 5.
 
-Menu options:
-  1  Enroll new user   (camera required)
-  2  Scan & identify   (camera required)
-  3  List enrolled users
-  4  Delete user
-  5  System report
-  Q  Quit
+Features:
+  - Always-On Live NIR Camera Feed with Alignment HUD
+  - Interactive Hotkeys: [N] Enroll, [S] Scan, [L] List Users, [Q] Quit
+  - 5-Second Multi-Angle Positioning Countdown rendered on Live Video
+  - SQLite Database Vault + 4-Worker Parallel Matcher Engine
 """
 
-import os
 import sys
+import os
 import time
 import cv2
 import numpy as np
 
-from db_manager import (
-    init_db, enroll_user, user_exists, list_users, delete_user,
-    log_access, get_all_signatures, get_templates_by_ids,
-    get_username, compute_signature,
-)
-from search_engine import SearchEngine
 from mediapipe_img import (
     build_landmarker, detect_hand_landmarks,
     extract_valleys_from_landmarks, segment_hand,
@@ -34,9 +24,14 @@ from mediapipe_img import (
     DEFAULT_MODEL_PATH,
 )
 from gabor import extract_veincode, match_templates, MATCH_THRESHOLD
+from db_manager import (
+    init_db, enroll_user, delete_user, list_users,
+    user_exists, log_access, count_users,
+)
+from search_engine import SearchEngine
 
 # ---------------------------------------------------------------------------
-# Directory constants
+# Directories
 # ---------------------------------------------------------------------------
 CAPTURE_DIR = "captures"
 ROI_DIR     = "roi_clahe"
@@ -44,10 +39,15 @@ os.makedirs(CAPTURE_DIR, exist_ok=True)
 os.makedirs(ROI_DIR,     exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Camera initialisation (graceful degradation on non-Pi hardware)
+# Camera Setup
 # ---------------------------------------------------------------------------
+CAMERA_AVAILABLE = False
+picam2 = None
+cv_cap = None
+CAMERA_TYPE = "None"
+
 try:
-    from picamera2 import Picamera2, Preview
+    from picamera2 import Picamera2
     picam2 = Picamera2()
     preview_cfg = picam2.create_preview_configuration(
         main={"size": (640, 480), "format": "RGB888"}
@@ -63,20 +63,29 @@ try:
         "AnalogueGain": 1.0,
     })
     CAMERA_AVAILABLE = True
-except Exception:
-    picam2 = None
-    CAMERA_AVAILABLE = False
-
+    CAMERA_TYPE = "picamera2"
+    print("[+] Picamera2 initialized successfully.")
+except Exception as e:
+    print(f"[-] Picamera2 not available: {e}")
+    try:
+        cap = cv2.VideoCapture(0)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                cv_cap = cap
+                CAMERA_AVAILABLE = True
+                CAMERA_TYPE = "opencv"
+                print("[+] OpenCV VideoCapture(0) fallback initialized.")
+            else:
+                cap.release()
+    except Exception as e2:
+        print(f"[-] OpenCV camera fallback failed: {e2}")
 
 # ---------------------------------------------------------------------------
-# Core pipeline (independent copy — no dependency on vein.py)
+# Core Pipeline
 # ---------------------------------------------------------------------------
-
 def process_frame(gray: np.ndarray, landmarker) -> tuple:
-    """
-    Raw grayscale frame → (clahe_roi, veincode).
-    Raises ValueError on any pipeline failure.
-    """
+    """Raw grayscale frame -> (clahe_roi, veincode)."""
     stretched     = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
     landmarks     = detect_hand_landmarks(stretched, landmarker)
     pv1, pv2      = extract_valleys_from_landmarks(landmarks)
@@ -90,12 +99,36 @@ def process_frame(gray: np.ndarray, landmarker) -> tuple:
     return clahe_roi, code
 
 
-# ---------------------------------------------------------------------------
-# File-save helpers
-# ---------------------------------------------------------------------------
+def _get_live_frame() -> np.ndarray:
+    """Returns a 640x480 BGR frame for live display."""
+    if CAMERA_TYPE == "picamera2" and picam2 is not None:
+        frame = picam2.capture_array()
+        return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    elif CAMERA_TYPE == "opencv" and cv_cap is not None:
+        ret, frame = cv_cap.read()
+        if ret and frame is not None:
+            return cv2.resize(frame, (640, 480))
+    # Fallback blank frame
+    canvas = np.full((480, 640, 3), 30, dtype=np.uint8)
+    cv2.putText(canvas, "CAMERA OFFLINE", (180, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+    return canvas
 
-def _save_capture(gray: np.ndarray, username: str, mode: str,
-                  idx: int = 0) -> str:
+
+def _capture_hires_gray() -> np.ndarray:
+    """Grabs a high-resolution frame for biometric processing."""
+    if CAMERA_TYPE == "picamera2" and picam2 is not None:
+        picam2.switch_mode(still_cfg)
+        frame = picam2.capture_array()
+        picam2.switch_mode(preview_cfg)
+        return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    elif CAMERA_TYPE == "opencv" and cv_cap is not None:
+        ret, frame = cv_cap.read()
+        if ret and frame is not None:
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return np.zeros((480, 640), dtype=np.uint8)
+
+
+def _save_capture(gray: np.ndarray, username: str, mode: str, idx: int = 0) -> str:
     ts   = time.strftime("%Y%m%d_%H%M%S")
     name = (f"{username}_enroll_{idx}_{ts}.png" if mode == "enroll"
             else f"{username}_scan_{ts}.png")
@@ -104,8 +137,7 @@ def _save_capture(gray: np.ndarray, username: str, mode: str,
     return path
 
 
-def _save_roi(roi: np.ndarray, username: str, mode: str,
-              idx: int = 0) -> str:
+def _save_roi(roi: np.ndarray, username: str, mode: str, idx: int = 0) -> str:
     ts   = time.strftime("%Y%m%d_%H%M%S")
     name = (f"{username}_enroll_{idx}_{ts}_clahe.png" if mode == "enroll"
             else f"{username}_scan_{ts}_clahe.png")
@@ -115,471 +147,306 @@ def _save_roi(roi: np.ndarray, username: str, mode: str,
 
 
 # ---------------------------------------------------------------------------
-# Camera capture helper
+# Visual HUD & Overlay Drawing
 # ---------------------------------------------------------------------------
+def _draw_hud(bgr: np.ndarray, status_msg: str = "", timer_val: int = None, hint_msg: str = "") -> np.ndarray:
+    """Draws target alignment box, countdown timer, and status HUD."""
+    h, w, _ = bgr.shape
+    cx, cy = w // 2, h // 2
+    box_sz = 130
 
-def _capture_gray() -> np.ndarray:
-    """Switch to still mode, grab one frame, return grayscale ndarray."""
-    picam2.switch_mode(still_cfg)
-    frame = picam2.capture_array()
-    picam2.switch_mode(preview_cfg)
-    return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    # Target alignment box
+    color = (0, 255, 200) if timer_val is None else (0, 220, 255)
+    cv2.rectangle(bgr, (cx - box_sz, cy - box_sz), (cx + box_sz, cy + box_sz), color, 2)
+    cv2.putText(bgr, "ALIGN PALM HERE", (cx - 95, cy - box_sz - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
-
-# ---------------------------------------------------------------------------
-# UI helpers
-# ---------------------------------------------------------------------------
-
-def _banner():
-    print("\n╔══════════════════════════════════════╗")
-    print("║     PALM VEIN AUTHENTICATION         ║")
-    print("║     Raspberry Pi 5  |  NIR Camera    ║")
-    print("╚══════════════════════════════════════╝\n")
-    cam_status = "READY" if CAMERA_AVAILABLE else "OFFLINE (laptop mode)"
-    print(f"  Camera  : {cam_status}")
-    print(f"  Model   : {DEFAULT_MODEL_PATH}")
-    print()
-
-
-def _menu():
-    print("  [1]  Enroll new user")
-    print("  [2]  Scan & identify")
-    print("  [3]  List enrolled users")
-    print("  [4]  Delete user")
-    print("  [5]  System report")
-    print("  [Q]  Quit")
-    print()
-
-
-def _hr(char="─", width=44):
-    print(char * width)
-
-
-def _no_camera():
-    print("  Camera not available — use test_offline.py for offline testing.")
-
-
-def _validate_username(raw: str) -> str:
-    """Strip, lowercase, and validate. Returns clean name or '' on failure."""
-    name = raw.strip().lower()
-    if not name:
-        return ""
-    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
-    if not all(c in allowed for c in name):
-        return ""
-    return name
-
-
-# ---------------------------------------------------------------------------
-# Option 1 — Enroll new user
-# ---------------------------------------------------------------------------
-
-def _consistency_check(veincode_list: list) -> int:
-    """
-    Pairwise MNHD check. Prints result and returns number of bad pairs.
-    Threshold: 0.50 (scores in genuine matches are typically 0.10-0.45).
-    """
-    bad = []
-    for a in range(len(veincode_list)):
-        for b in range(a + 1, len(veincode_list)):
-            s = match_templates(veincode_list[a], veincode_list[b])
-            if s > 0.50:
-                bad.append((a, b, s))
-    if bad:
-        print(f"  WARNING: {len(bad)} inconsistent pair(s) — consider re-enrolling.")
-        for a, b, s in bad:
-            print(f"    Sample {a+1} vs Sample {b+1}: {s:.4f}")
+    # Top banner with countdown timer
+    cv2.rectangle(bgr, (0, 0), (w, 50), (15, 15, 15), -1)
+    if timer_val is not None:
+        cv2.putText(bgr, f"CAPTURING IN: {timer_val}s", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+        cv2.putText(bgr, "STEADY HAND", (w - 180, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
     else:
-        print("  Quality check: GOOD")
-    return len(bad)
+        cv2.putText(bgr, "PALM VEIN BIOMETRICS", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+        cv2.putText(bgr, "[N]Enroll  [S]Scan  [Q]Quit", (w - 290, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 200), 1)
+
+    # Bottom guidance footer
+    footer_text = hint_msg or status_msg or "Press [N] in window or terminal to enroll, [S] to scan."
+    cv2.rectangle(bgr, (0, h - 35), (w, h), (15, 15, 15), -1)
+    cv2.putText(bgr, footer_text, (15, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    return bgr
 
 
-def _start_preview():
-    """Starts live hardware camera preview directly on the Raspberry Pi display."""
-    if CAMERA_AVAILABLE and picam2 is not None:
-        for mode in (getattr(Preview, 'QTGL', None), getattr(Preview, 'DRM', None), None):
-            try:
-                if mode is not None:
-                    picam2.start_preview(mode)
-                else:
-                    picam2.start_preview()
-                print("  [✓] Camera preview window is ACTIVE on your screen.")
-                return True
-            except Exception:
-                continue
-    return False
-
-
-def _stop_preview():
-    """Stops live hardware camera preview."""
-    if CAMERA_AVAILABLE and picam2 is not None:
-        try:
-            picam2.stop_preview()
-        except Exception:
-            pass
-
-
-def _countdown(seconds=5, message="Get ready"):
-    """Visual countdown timer in terminal while camera is active on screen."""
-    print(f"  --> {message}")
-    for s in range(seconds, 0, -1):
-        print(f"      [{s}s] Check your palm position on screen...", end="\r", flush=True)
-        time.sleep(1)
-    print("      [📸 CAPTURING NOW!]                                ", flush=True)
-
-
-def _capture_one_sample(landmarker, username: str, idx: int, guidance: str = ""):
+# ---------------------------------------------------------------------------
+# 5-Second Timed Capture Routine
+# ---------------------------------------------------------------------------
+def _timed_sample_capture(landmarker, username: str, sample_idx: int, hint: str):
     """
-    Capture one palm sample with live preview and a 5-second countdown.
-    Returns (gray, clahe_roi, code, elapsed) on success, or None on double fail.
+    Shows live countdown on the camera window for 5 seconds, then snaps high-res frame.
     """
-    sample_hints = [
-        "Position 1/6: Hold palm flat, centered ~10-15cm above sensor",
-        "Position 2/6: Tilt palm slightly to the LEFT (~5 degrees)",
-        "Position 3/6: Tilt palm slightly to the RIGHT (~5 degrees)",
-        "Position 4/6: Raise palm slightly HIGHER (~15-18cm)",
-        "Position 5/6: Spread fingers slightly wider",
-        "Position 6/6: Hold palm flat, centered for final confirmation",
-    ]
-    hint = guidance or sample_hints[min(idx, len(sample_hints) - 1)]
+    win_name = "Live NIR Palm Feed"
+    t_end = time.time() + 5.0
 
-    for attempt in range(2):
-        if attempt == 1:
-            print("    [!] Landmark detection failed. Reposition hand and retrying...")
-        
-        _countdown(5, hint)
-        t0   = time.time()
-        gray = _capture_gray()
-        try:
-            clahe_roi, code = process_frame(gray, landmarker)
-            return gray, clahe_roi, code, time.time() - t0
-        except ValueError as e:
-            print(f"    [!] Failed: {e}")
-            if attempt == 0:
-                print("    Press ENTER to start 5-second retry countdown...")
-                input()
-    print("    [!] Sample failed twice — skipping.")
-    return None
+    while time.time() < t_end:
+        rem = max(1, int(t_end - time.time() + 0.99))
+        frame = _get_live_frame()
+        hud = _draw_hud(frame, timer_val=rem, hint_msg=f"Sample [{sample_idx+1}/6]: {hint}")
+        cv2.imshow(win_name, hud)
+        cv2.waitKey(20)
+
+    # Flash white on snap
+    flash = np.full((480, 640, 3), 255, dtype=np.uint8)
+    cv2.imshow(win_name, flash)
+    cv2.waitKey(60)
+
+    # Capture high-res frame
+    t0 = time.time()
+    gray = _capture_hires_gray()
+
+    try:
+        clahe_roi, code = process_frame(gray, landmarker)
+        return gray, clahe_roi, code, time.time() - t0
+    except ValueError as e:
+        return gray, None, None, str(e)
 
 
+# ---------------------------------------------------------------------------
+# Enrollment Loop (6 Multi-Angle Samples with 5s Timer)
+# ---------------------------------------------------------------------------
 def opt_enroll(landmarker, engine):
-    """Enroll a new user with live camera preview and 5-second timers."""
+    """Enroll a user with live camera window and 5s countdown per sample."""
     if not CAMERA_AVAILABLE:
-        _no_camera()
+        print("  [!] Camera not available.")
         return
 
-    raw = input("  Enter username: ")
-    username = _validate_username(raw)
+    raw = input("\n  Enter username to enroll: ")
+    username = raw.strip().lower().replace(" ", "_")
     if not username:
-        print("  Invalid username. Use a-z, 0-9, underscore, hyphen only.")
+        print("  [!] Invalid username.")
         return
 
     if user_exists(username):
-        print(f"  '{username}' is already enrolled. Delete first to re-enroll.")
+        print(f"  [!] '{username}' already exists. Delete first to re-enroll.")
         return
 
     print(f"\n  ========================================================")
     print(f"   Enrolling '{username}' — 6 Multi-Angle Palm Samples")
-    print(f"   Opening live camera preview on screen...")
+    print(f"   Look at the 'Live NIR Palm Feed' window on your screen!")
     print(f"  ========================================================\n")
 
-    # Start live preview window on screen
-    _start_preview()
+    sample_hints = [
+        "Hold palm flat, centered ~10-15cm above sensor",
+        "Tilt palm slightly to the LEFT (~5 degrees)",
+        "Tilt palm slightly to the RIGHT (~5 degrees)",
+        "Raise palm slightly HIGHER (~15-18cm)",
+        "Spread fingers slightly wider",
+        "Hold palm flat, centered for final confirmation",
+    ]
 
     veincode_list = []
+    win_name = "Live NIR Palm Feed"
 
-    try:
-        for i in range(6):
-            input(f"\n  Sample [{i+1}/6] — Look at screen to position palm. Press ENTER to start 5s countdown...")
-            result = _capture_one_sample(landmarker, username, i)
-            if result is None:
-                continue
-            gray, clahe_roi, code, elapsed = result
-            _save_capture(gray,     username, "enroll", idx=i)
-            _save_roi(clahe_roi,    username, "enroll", idx=i)
-            veincode_list.append(code)
-            print(f"    ✓ OK Sample [{i+1}/6] captured! (VR={code['VR'].mean():.3f} in {elapsed:.2f}s)")
-    finally:
-        _stop_preview()
+    for i in range(6):
+        hint = sample_hints[i]
+        print(f"  Sample [{i+1}/6]: {hint}")
+        print(f"  Look at screen... 5-second countdown starting now!")
+
+        for attempt in range(2):
+            gray, clahe_roi, code, result = _timed_sample_capture(landmarker, username, i, hint)
+            
+            if code is not None:
+                _save_capture(gray, username, "enroll", idx=i)
+                _save_roi(clahe_roi, username, "enroll", idx=i)
+                veincode_list.append(code)
+                print(f"    ✓ OK Sample [{i+1}/6] captured! (VR={code['VR'].mean():.3f} in {result:.2f}s)\n")
+                
+                # Show success badge on screen for 1 second
+                for _ in range(15):
+                    f = _get_live_frame()
+                    cv2.putText(f, f"SAMPLE [{i+1}/6] ACCEPTED! OK", (120, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    cv2.imshow(win_name, f)
+                    cv2.waitKey(50)
+                break
+            else:
+                print(f"    [!] Detection failed: {result}")
+                if attempt == 0:
+                    print("    Retrying in 5 seconds... Adjust hand position.")
+                    for _ in range(15):
+                        f = _get_live_frame()
+                        cv2.putText(f, "REPOSITION HAND - RETRYING...", (120, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.imshow(win_name, f)
+                        cv2.waitKey(50)
 
     if len(veincode_list) < 3:
-        print(f"\n  Too few valid samples ({len(veincode_list)}/3 minimum). Cancelled.")
+        print(f"\n  [!] Too few valid samples ({len(veincode_list)}/3 minimum). Enrollment cancelled.\n")
         return
-
-    print()
-    _consistency_check(veincode_list)
 
     enroll_user(username, veincode_list)
     engine.refresh_cache()
-    print(f"\n  [+] ENROLLED: '{username}' with {len(veincode_list)} samples stored in database.\n")
+    print(f"\n  [+] ENROLLED: '{username}' successfully with {len(veincode_list)} samples stored in database.\n")
 
 
 # ---------------------------------------------------------------------------
-# Option 2 — Scan & identify
+# Scan & Identify Routine (3s Live Countdown)
 # ---------------------------------------------------------------------------
-
 def opt_scan(landmarker, engine):
-    """Capture one palm with live camera preview and identify the user."""
+    """Identifies a user with live camera window and 3s countdown."""
     if not CAMERA_AVAILABLE:
-        _no_camera()
+        print("  [!] Camera not available.")
         return
 
-    print("  Opening live camera preview on screen...")
-    _start_preview()
+    win_name = "Live NIR Palm Feed"
+    print("\n  Starting 3-second Scan Countdown... Align palm inside the box!")
 
-    try:
-        input("  Look at screen to position palm. Press ENTER to start 3s scan countdown...")
-        _countdown(3, "Hold palm steady over sensor")
+    t_end = time.time() + 3.0
+    while time.time() < t_end:
+        rem = max(1, int(t_end - time.time() + 0.99))
+        frame = _get_live_frame()
+        hud = _draw_hud(frame, timer_val=rem, hint_msg="Hold palm steady inside green box to scan")
+        cv2.imshow(win_name, hud)
+        cv2.waitKey(20)
 
-        t0   = time.time()
-        gray = _capture_gray()
-    finally:
-        _stop_preview()
+    # Flash white on snap
+    flash = np.full((480, 640, 3), 255, dtype=np.uint8)
+    cv2.imshow(win_name, flash)
+    cv2.waitKey(60)
+
+    t0 = time.time()
+    gray = _capture_hires_gray()
 
     try:
         clahe_roi, probe_code = process_frame(gray, landmarker)
     except ValueError as e:
-        print(f"  [!] Scan failed: {e}")
+        print(f"\n  [!] Scan failed: {e}\n")
         return
 
     username, score = engine.identify(probe_code)
-    elapsed         = time.time() - t0
-    accepted        = username is not None
-
-    _print_scan_result(username, score, elapsed)
-    log_access(user_id=None, score=score, accepted=accepted)
+    elapsed = time.time() - t0
+    accepted = username is not None
 
     label = username if accepted else "unknown"
-    _save_capture(gray,     label, "scan")
-    _save_roi(clahe_roi,    label, "scan")
+    _save_capture(gray, label, "scan")
+    _save_roi(clahe_roi, label, "scan")
+    log_access(user_id=None, score=score, accepted=accepted)
 
-
-def _print_scan_result(username, score: float, elapsed: float):
-    result = f"AUTHENTICATED — {username}" if username else "NOT RECOGNISED"
-    _hr("─")
-    print(f"  RESULT : {result}")
-    if username:
+    print("\n  ──────────────────────────────────────────")
+    if accepted:
+        print(f"  RESULT : AUTHENTICATED — {username}")
         print(f"  User   : {username}")
+    else:
+        print(f"  RESULT : NOT RECOGNISED")
     print(f"  Score  : {score:.4f}  (threshold: {MATCH_THRESHOLD:.4f})")
     print(f"  Time   : {elapsed:.2f}s")
-    _hr("─")
-    print()
+    print("  ──────────────────────────────────────────\n")
+
+    # Display result overlay on screen for 2.5 seconds
+    badge_color = (0, 255, 0) if accepted else (0, 0, 255)
+    badge_text = f"VERIFIED: {username}" if accepted else "NOT RECOGNISED"
+    for _ in range(30):
+        f = _get_live_frame()
+        cv2.rectangle(f, (50, 180), (590, 300), (0, 0, 0), -1)
+        cv2.rectangle(f, (50, 180), (590, 300), badge_color, 3)
+        cv2.putText(f, badge_text, (70, 235), cv2.FONT_HERSHEY_SIMPLEX, 0.9, badge_color, 2)
+        cv2.putText(f, f"MNHD Score: {score:.4f} ({elapsed:.2f}s)", (70, 275), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.imshow(win_name, f)
+        cv2.waitKey(50)
 
 
 # ---------------------------------------------------------------------------
-# Option 3 — List enrolled users
+# List Users & Delete
 # ---------------------------------------------------------------------------
-
 def opt_list():
-    """Print a formatted table of all enrolled users."""
     users = list_users()
-    print()
+    print("\n  Enrolled Users in Database:")
     if not users:
-        print("  No users enrolled.")
-        return
-
-    print("  Enrolled Users")
-    _hr()
-    print(f"  {'#':<4} {'Username':<18} {'Samples':>7}   Enrolled At")
-    _hr()
-    for n, u in enumerate(users, 1):
-        enrolled = u["enrolled_at"][:10]
-        print(f"  {n:<4} {u['username']:<18} {u['sample_count']:>7}   {enrolled}")
-    _hr()
-    total = sum(u["sample_count"] for u in users)
-    print(f"  Total: {len(users)} user(s), {total} template(s)")
+        print("    (No users registered yet)")
+    else:
+        for u in users:
+            print(f"    - {u['username']} ({u['sample_count']} samples, enrolled: {u['enrolled_at']})")
     print()
 
-
-# ---------------------------------------------------------------------------
-# Option 4 — Delete user
-# ---------------------------------------------------------------------------
 
 def opt_delete(engine):
-    """Soft-delete an enrolled user after confirmation."""
-    opt_list()
-
-    raw = input("  Enter username to delete (or ENTER to cancel): ").strip()
-    if not raw:
-        print("  Cancelled.")
-        return
-
+    raw = input("\n  Enter username to delete: ")
     username = raw.strip().lower()
+    if not username:
+        return
     if not user_exists(username):
-        print(f"  '{username}' not found or already inactive.")
+        print(f"  [!] User '{username}' not found.")
         return
-
-    confirm = input(f"  Delete '{username}'? This cannot be undone. [y/N]: ")
-    if confirm.strip().lower() != "y":
-        print("  Cancelled.")
-        return
-
-    try:
-        delete_user(username)
-    except ValueError as e:
-        print(f"  Error: {e}")
-        return
-
+    delete_user(username)
     engine.refresh_cache()
-    print(f"  Deleted: '{username}'.\n")
+    print(f"  [✓] User '{username}' deleted from database.\n")
 
 
 # ---------------------------------------------------------------------------
-# Option 5 — System report
+# Main Interactive Loop
 # ---------------------------------------------------------------------------
-
-def _get_uid_map() -> dict:
-    """Return {username: user_id} for all active users from the signature cache."""
-    sig = get_all_signatures()
-    uid_map: dict = {}
-    for uid in sig["user_ids"]:
-        if uid not in uid_map.values():
-            try:
-                uid_map[get_username(uid)] = uid
-            except KeyError:
-                pass
-    return uid_map
-
-
-def _user_tids(uid: int, sig: dict) -> list:
-    """Return template IDs belonging to a given user_id."""
-    return [tid for tid, u in zip(sig["template_ids"], sig["user_ids"]) if u == uid]
-
-
-def _self_match_scores(templates: list) -> list:
-    """All pairwise MNHD scores for a single user's template list."""
-    scores = []
-    for a in range(len(templates)):
-        for b in range(a + 1, len(templates)):
-            scores.append(match_templates(templates[a], templates[b]))
-    return scores
-
-
-def _report_self_match(users: list, uid_map: dict, sig: dict):
-    print("  Self-Match (same user, different samples — target: all < 0.35)")
-    _hr()
-    print(f"  {'Username':<18} {'Min':>6}  {'Avg':>6}  {'Max':>6}  Quality")
-    _hr()
-    for u in users:
-        uid  = uid_map.get(u["username"])
-        tids = _user_tids(uid, sig)
-        if len(tids) < 2:
-            print(f"  {u['username']:<18}  (1 sample — skipped)")
-            continue
-        tmpl   = get_templates_by_ids(tids)
-        scores = _self_match_scores(tmpl)
-        mn, av, mx = min(scores), sum(scores) / len(scores), max(scores)
-        quality = "GOOD" if mx < 0.35 else "WARN — re-enroll advised"
-        print(f"  {u['username']:<18} {mn:>6.4f}  {av:>6.4f}  {mx:>6.4f}  {quality}")
-    _hr()
-    print()
-
-
-def _report_cross_match(users: list, uid_map: dict, sig: dict):
-    print("  Cross-Match (different users — target: all > 0.45)")
-    _hr()
-    for i in range(len(users)):
-        for j in range(i + 1, len(users)):
-            u1, u2 = users[i], users[j]
-            t1 = get_templates_by_ids(_user_tids(uid_map[u1["username"]], sig)[:1])
-            t2 = get_templates_by_ids(_user_tids(uid_map[u2["username"]], sig)[:1])
-            if not t1 or not t2:
-                continue
-            score  = match_templates(t1[0], t2[0])
-            status = "OK" if score > 0.45 else "WARN — false-accept risk"
-            print(f"  {u1['username']} vs {u2['username']}: {score:.4f}  {status}")
-    _hr()
-    print()
-
-
-def _report_last_scan() -> str:
-    """Return the timestamp of the most recent access_log entry, or 'never'."""
-    import sqlite3
-    from db_manager import DB_PATH
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            row = conn.execute(
-                "SELECT scan_at FROM access_log ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        return row[0] if row else "never"
-    except Exception:
-        return "unknown"
-
-
-def opt_report():
-    """Print self-match and cross-match accuracy report."""
-    users = list_users()
-    print()
-    total_tmpl = sum(u["sample_count"] for u in users)
-    print(f"  Users: {len(users)}   Templates: {total_tmpl}")
-    print(f"  Last scan: {_report_last_scan()}")
-    print()
-
-    if not users:
-        print("  No users enrolled — nothing to report.")
-        return
-
-    sig     = get_all_signatures()
-    uid_map = _get_uid_map()
-
-    _report_self_match(users, uid_map, sig)
-
-    if len(users) >= 2:
-        _report_cross_match(users, uid_map, sig)
-
-
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-
 def main():
-    _banner()
-    print("  Initialising database...")
+    print("\n╔════════════════════════════════════════════════════════╗")
+    print("║          PALM VEIN AUTHENTICATION SYSTEM               ║")
+    print("║            Raspberry Pi 5  |  NoIR Camera              ║")
+    print("╚════════════════════════════════════════════════════════╝\n")
+    print(f"  Camera : {'READY (' + CAMERA_TYPE + ')' if CAMERA_AVAILABLE else 'OFFLINE'}")
+    print(f"  Model  : {DEFAULT_MODEL_PATH}")
+
+    print("\n  [1/3] Initialising database...")
     init_db()
 
-    print("  Loading search engine...")
+    print("  [2/3] Loading 4-worker search engine...")
     engine = SearchEngine(n_workers=4)
 
-    print("  Loading MediaPipe landmarker...")
+    print("  [3/3] Loading MediaPipe landmarker...")
     try:
         landmarker = build_landmarker(DEFAULT_MODEL_PATH)
-    except FileNotFoundError as e:
-        print(f"\n  ERROR: {e}")
+    except Exception as e:
+        print(f"  [!] MediaPipe loading error: {e}")
         engine.shutdown()
         sys.exit(1)
 
-    print("  Ready.\n")
+    print("\n  ========================================================")
+    print("   Live Camera Feed is starting on your monitor screen!")
+    print("   Hotkeys in Camera Window or Terminal:")
+    print("     [N] = Enroll New User (with 5-second timers)")
+    print("     [S] = Scan & Identify (with 3-second timer)")
+    print("     [L] = List Enrolled Users")
+    print("     [D] = Delete User")
+    print("     [Q] = Quit")
+    print("  ========================================================\n")
+
+    win_name = "Live NIR Palm Feed"
+    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win_name, 640, 480)
 
     try:
-        _run_loop(landmarker, engine)
+        while True:
+            frame = _get_live_frame()
+            hud = _draw_hud(frame)
+            cv2.imshow(win_name, hud)
+
+            key = cv2.waitKey(25) & 0xFF
+
+            if key == ord('q') or key == 27:
+                print("  Quitting application...")
+                break
+            elif key == ord('n') or key == ord('1'):
+                opt_enroll(landmarker, engine)
+            elif key == ord('s') or key == ord('2'):
+                opt_scan(landmarker, engine)
+            elif key == ord('l') or key == ord('3'):
+                opt_list()
+            elif key == ord('d') or key == ord('4'):
+                opt_delete(engine)
+
     finally:
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
         engine.shutdown()
-        if CAMERA_AVAILABLE and picam2 is not None:
+        if CAMERA_TYPE == "picamera2" and picam2 is not None:
             picam2.stop()
-        print("\n  Goodbye.\n")
-
-
-def _run_loop(landmarker, engine):
-    """Interactive menu loop. Runs until the user presses Q."""
-    while True:
-        _menu()
-        choice = input("  Choice: ").strip().lower()
-        print()
-
-        if choice == "1":
-            opt_enroll(landmarker, engine)
-        elif choice == "2":
-            opt_scan(landmarker, engine)
-        elif choice == "3":
-            opt_list()
-        elif choice == "4":
-            opt_delete(engine)
-        elif choice == "5":
-            opt_report()
-        elif choice in ("q", "quit", "exit"):
-            break
-        else:
-            print("  Unknown option. Enter 1–5 or Q.\n")
+        elif CAMERA_TYPE == "opencv" and cv_cap is not None:
+            cv_cap.release()
+        print("\n  System shutdown clean. Goodbye!\n")
 
 
 if __name__ == "__main__":
